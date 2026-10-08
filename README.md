@@ -7,6 +7,7 @@ repository itself is never modified from here. Reports live in `reports/`.
   server lacks `libasound`, so it is extracted from the Ubuntu deb into `.browsers/libs`.
 - `cdp-eval.mjs` — evaluate an expression in a page over raw CDP.
 - `mcp-call.mjs` — minimal stdio MCP client driving `chrome-devtools-mcp@1.10.1`.
+- `s4-metrics.py` — S4 metrics from a Codex rollout jsonl (`python3 s4-metrics.py <rollout>.jsonl`).
 - `pix3-full/` (gitignored) — local clone of pix3 with `w-skeleton/editor-patch/` applied; the
   skeleton editor is built from here.
 - `w-skeleton/` — W: the current editor served at `/__pix3/` by a Vite plugin over `pix3 serve`,
