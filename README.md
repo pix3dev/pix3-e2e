@@ -1,0 +1,16 @@
+# pix3-core P0 spikes
+
+Throwaway spike code for `pix3/.plans/pix3-core.md` §G.1 (P0). Not a product repo, and the pix3
+repository itself is never modified from here. Reports live in `reports/`.
+
+- `chrome.sh` — headless Chrome 155 (chrome-headless-shell) with WebGL2 via SwiftShader; this
+  server lacks `libasound`, so it is extracted from the Ubuntu deb into `.browsers/libs`.
+- `cdp-eval.mjs` — evaluate an expression in a page over raw CDP.
+- `mcp-call.mjs` — minimal stdio MCP client driving `chrome-devtools-mcp@1.10.1`.
+- `pix3-full/` (gitignored) — local clone of pix3 with `w-skeleton/editor-patch/` applied; the
+  skeleton editor is built from here.
+- `w-skeleton/` — W: the current editor served at `/__pix3/` by a Vite plugin over `pix3 serve`,
+  plus the S4 3p-tool registration.
+- `s1-one-instance/` — S1: one runtime instance, no editor reload, sync barrier.
+- `s12-patch/` — S12: `ScenePatchWriter` + `norm` prototype.
+- `reports/` — `pix3-core-p0-{w,s1,s12,human}.md`.

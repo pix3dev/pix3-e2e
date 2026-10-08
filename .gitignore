@@ -1,0 +1,9 @@
+.browsers/
+node_modules/
+*.tgz
+pix3-full/
+w-skeleton/editor-dist/
+w-skeleton/.chrome-profile/
+*.log
+s12-patch/dist/*.mjs
+s12-patch/dist/dumps/
