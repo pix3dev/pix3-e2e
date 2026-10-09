@@ -1,0 +1,7 @@
+# Recreated before each run (README); browser profiles and Vite caches.
+proj/
+proj3d/
+profile*/
+.vite-cache*/
+node_modules
+*.log
