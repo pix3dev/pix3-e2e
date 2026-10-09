@@ -1,27 +1,56 @@
-// Cross-check of .plans/write-model.md W1/W2: the size an un-sized Sprite2D gets in the EDITOR
-// (the browser decodes the image) must equal what Node reads from the image header
-// (`readImageHeaderSize`, used by NodeAssetLoader for `pix3 validate` / the plugin) — else the same
-// scene normalises differently on the two sides. Images are made by Chrome itself.
-import { spawn } from 'node:child_process';
+// Cross-check of .plans/write-model.md W1/W2 (S12 §4.2): a node whose size can come from an image
+// must normalise the same in the EDITOR (the browser decodes the image) and in Node (`pix3
+// validate`, the plugin: `NodeAssetLoader` reads the image header) — else one scene has two norms.
+//
+// 1. `Sprite2D`, un-sized, per image kind: editor size == `readImageHeaderSize` (PNG/JPEG/WebP made
+//    by Chrome itself, 8 SVG variants).
+// 2. Every textured node type, un-sized (`AnimatedSprite2D` stretch + native over a `.pix3anim`,
+//    `AnimatedSprite3D`, `Sprite3D`, `TiledSprite2D`, `Button2D`, `Bar2D`, `Slider2D`,
+//    `Checkbox2D`): the editor's saved node == the Node norm of the same file, property by property.
+// 3. Auto-sized UI — a `flow` column with `autoSize` stacking un-sized sprites: the editor lays it
+//    out from decoded sizes, Node from header sizes; the children must land on the same positions.
+//
+// Uses `$PROJ_DIR` (default `proj/`, a recipe copy, see README); restores its `scenes/main.pix3scene`.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer } from 'vite';
 import { pix3 } from '/data/igor.gritsenko/projects/pix3-stuff/pix3-core/packages/vite-plugin/dist/index.js';
-import { readImageHeaderSize } from '/data/igor.gritsenko/projects/pix3-stuff/pix3-core/packages/runtime/src/core/image-header-size.ts';
-import { Browser } from './cdp.mjs';
+import { launchChrome } from './cdp.mjs';
 
+const CORE = '/data/igor.gritsenko/projects/pix3-stuff/pix3-core';
 const HERE = import.meta.dirname;
-const PROJ = join(HERE, 'proj');
+const PROJ = join(HERE, process.env.PROJ_DIR ?? 'proj');
 const PORT = 5297;
 const results = [];
 const check = (name, pass, detail) => { results.push(!!pass); console.log(`${pass ? 'PASS' : 'FAIL'} ${name} — ${JSON.stringify(detail)}`); };
 
+/** Equal as JSON documents, numbers within 1e-6 (the saver's float noise). */
+const same = (a, b) => {
+  if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 1e-6;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => same(x, b[i]));
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const ka = Object.keys(a).filter(k => a[k] !== undefined).sort();
+    const kb = Object.keys(b).filter(k => b[k] !== undefined).sort();
+    return ka.length === kb.length && ka.every((k, i) => k === kb[i] && same(a[k], b[k]));
+  }
+  return a === b;
+};
+const differing = (a = {}, b = {}) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !same(a[k], b[k])).map(k => ({ key: k, editor: a[k], node: b[k] }));
+
+// Node side: the runtime's own harness (`NodeAssetLoader` + the saver), loaded through Vite's SSR.
+const ssr = await createServer({ configFile: false, root: CORE, logLevel: 'warn', server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
+const nodeMod = await ssr.ssrLoadModule(`${CORE}/packages/runtime/src/node/index.ts`);
+const corpus = await ssr.ssrLoadModule(`${CORE}/packages/runtime/src/node/scene-corpus.ts`);
+const runtime = await ssr.ssrLoadModule(`${CORE}/packages/runtime/src/index.ts`);
+const { readImageHeaderSize } = await ssr.ssrLoadModule(`${CORE}/packages/runtime/src/core/image-header-size.ts`);
+
 mkdirSync(join(HERE, 'profile-size'), { recursive: true });
-const chrome = spawn('/data/igor.gritsenko/projects/pix3-stuff/pix3-core-spikes/chrome.sh', ['--remote-debugging-port=9367', `--user-data-dir=${join(HERE, 'profile-size')}`, 'about:blank'], { stdio: 'ignore' });
-const browser = await Browser.connect(9367);
+const { chrome, browser } = await launchChrome(join(HERE, 'profile-size'), []);
+const scenePath = join(PROJ, 'scenes/main.pix3scene');
+const original = readFileSync(scenePath, 'utf8');
 let server;
 try {
-  // 1. Raster images from Chrome's own encoders.
+  // --- images: raster from Chrome's own encoders, SVG variants by hand ----------------------------
   const maker = await browser.newPage('maker');
   const raster = await maker.evaluate(`(async () => {
     const out = {};
@@ -44,41 +73,93 @@ try {
   files['xcheck-width-viewbox.svg'] = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="50" viewBox="0 0 100 40"><rect width="100" height="40"/></svg>');
   mkdirSync(join(PROJ, 'sprites'), { recursive: true });
   for (const [name, bytes] of Object.entries(files)) writeFileSync(join(PROJ, 'sprites', name), bytes);
+  writeFileSync(join(PROJ, 'sprites/xcheck.pix3anim'), JSON.stringify({
+    version: '1.0.0',
+    texturePath: '',
+    clips: [{ name: 'idle', fps: 8, loop: true, frames: [{ texturePath: 'res://sprites/xcheck.png' }, { texturePath: 'res://sprites/xcheck-viewbox.svg' }] }],
+  }, null, 2));
 
-  // 2. A scene of un-sized sprites, opened in the editor as the entry scene.
+  // --- the scene ------------------------------------------------------------------------------------
   const names = Object.keys(files);
-  const scene = ['version: 1.0.0', 'root:', ...names.flatMap((name, i) => [
-    `  - id: s${i}`, '    type: Sprite2D', `    name: ${name}`, '    properties:',
-    `      texture: { type: texture, url: res://sprites/${name} }`,
-  ])].join('\n') + '\n';
-  const scenePath = join(PROJ, 'scenes/main.pix3scene');
-  const original = readFileSync(scenePath, 'utf8');
+  const tex = name => `{ type: texture, url: res://sprites/${name} }`;
+  const node = (id, type, props, extra = []) => [`  - id: ${id}`, `    type: ${type}`, `    name: ${id}`, '    properties:', ...props.map(p => `      ${p}`), ...extra];
+  const typed = [
+    ['anim-stretch', 'AnimatedSprite2D', ['animationResourcePath: res://sprites/xcheck.pix3anim']],
+    ['anim-native', 'AnimatedSprite2D', ['animationResourcePath: res://sprites/xcheck.pix3anim', 'sizeMode: native']],
+    ['anim3d', 'AnimatedSprite3D', ['animationResourcePath: res://sprites/xcheck.pix3anim']],
+    ['sprite3d-png', 'Sprite3D', [`texture: ${tex('xcheck.png')}`]],
+    ['sprite3d-svg', 'Sprite3D', [`texture: ${tex('xcheck-viewbox.svg')}`]],
+    ['tiled', 'TiledSprite2D', [`texture: ${tex('xcheck.webp')}`]],
+    ['button', 'Button2D', [`textureNormal: ${tex('xcheck.png')}`, `textureHover: ${tex('xcheck-attrs.svg')}`]],
+    ['bar', 'Bar2D', [`textureTrough: ${tex('xcheck.jpg')}`, `textureFill: ${tex('xcheck-px.svg')}`]],
+    ['slider', 'Slider2D', [`textureTrack: ${tex('xcheck.png')}`, `textureThumb: ${tex('xcheck-bare.svg')}`]],
+    ['checkbox', 'Checkbox2D', [`textureBox: ${tex('xcheck.webp')}`, `textureMark: ${tex('xcheck-width-only.svg')}`]],
+  ];
+  const flowKids = ['xcheck.png', 'xcheck-viewbox.svg', 'xcheck-height-viewbox.svg', 'xcheck.jpg'];
+  const scene = ['version: 1.0.0', 'root:',
+    ...names.flatMap((name, i) => node(`s${i}`, 'Sprite2D', [`texture: ${tex(name)}`])),
+    ...typed.flatMap(([id, type, props]) => node(id, type, props)),
+    ...node('column', 'Group2D', ['width: 200', 'height: 10', 'flow:', '  enabled: true', '  gap: 4', '  autoSize: true'], [
+      '    children:',
+      ...flowKids.flatMap((name, i) => [`      - id: f${i}`, '        type: Sprite2D', `        name: f${i}`, '        properties:', `          texture: ${tex(name)}`]),
+    ]),
+  ].join('\n') + '\n';
   writeFileSync(scenePath, scene);
+
+  // --- editor ---------------------------------------------------------------------------------------
   server = await createServer({ configFile: false, root: PROJ, logLevel: 'warn', cacheDir: join(HERE, '.vite-cache-size'), plugins: [pix3()], server: { port: PORT, strictPort: true, host: '127.0.0.1' } });
   await server.listen();
   const page = await browser.newPage('editor');
   await page.navigate(`http://127.0.0.1:${PORT}/__pix3/`);
   await page.waitFor(`!!window.__PIX3_DEBUG__ && !!window.__PIX3_DEBUG__.status().activeScene && !!window.__PIX3_DEBUG__.node('s0')`, 60000);
-  await new Promise(r => setTimeout(r, 1500));
+  await new Promise(r => setTimeout(r, 2500)); // animation resources and frame textures load async
+  const editorNode = id => page.evaluate(`(() => { const n = window.__PIX3_DEBUG__.node(${JSON.stringify(id)}); return n ? { saved: n.saved, position: n.transform?.position ?? null } : null; })()`);
 
-  // 3. Editor (decoded) vs Node (header).
+  // --- Node -----------------------------------------------------------------------------------------
+  const uninstall = nodeMod.installCanvasOnlyDocument();
+  const h = corpus.createSceneHarness(PROJ);
+  const graph = await h.parse(scene, 'scenes/main.pix3scene');
+  await new Promise(r => setTimeout(r, 300)); // the same async asset loads, on the Node side
+  const nodeNorm = h.normOf(graph);
+  const nodeDefs = new Map();
+  const index = defs => (defs ?? []).forEach(d => { nodeDefs.set(d.id, d); index(d.children); });
+  index(nodeNorm.root);
+  for (const root of graph.rootNodes) if (root instanceof runtime.Node2D) root.applyAnchoredLayoutRecursive({ width: 720, height: 1280 }, { width: 720, height: 1280 });
+  uninstall();
+
+  // 1. Sprite2D: editor (decoded) vs header.
   for (const [i, name] of names.entries()) {
-    const node = await page.evaluate(`window.__PIX3_DEBUG__.node('s${i}')?.saved?.properties ?? null`);
+    const props = (await editorNode(`s${i}`))?.saved?.properties ?? null;
     const header = readImageHeaderSize(new Uint8Array(files[name]));
-    const editor = node ? { width: node.width, height: node.height } : null;
-    const same = header && editor && header.width === editor.width && header.height === editor.height;
-    check(`${name}: editor size == header size`, same, { editor, header });
+    const editor = props ? { width: props.width, height: props.height } : null;
+    check(`Sprite2D ${name}: editor size == header size`, header && editor && header.width === editor.width && header.height === editor.height, { editor, header });
+  }
+  // 2. Every textured type: the saved node, property by property.
+  for (const [id, type] of [...names.map((_, i) => [`s${i}`, 'Sprite2D']), ...typed]) {
+    const editor = (await editorNode(id))?.saved ?? null;
+    const diff = differing(editor?.properties, nodeDefs.get(id)?.properties);
+    check(`${type} ${id}: editor norm == Node norm`, editor && diff.length === 0, diff.length ? diff : { width: editor?.properties?.width, height: editor?.properties?.height });
+  }
+  // 3. Auto-sized flow column: same layout from decoded and from header sizes.
+  for (const [i] of flowKids.entries()) {
+    const editor = (await editorNode(`f${i}`))?.position;
+    const n = graph.nodeMap.get(`f${i}`);
+    const nodePos = n ? { x: n.position.x, y: n.position.y } : null;
+    check(`flow autoSize child f${i} (${flowKids[i]}): editor position == Node position`, editor && nodePos && same(editor.x, nodePos.x) && same(editor.y, nodePos.y), { editor, node: nodePos });
   }
   check('the scene file was not written by opening it', readFileSync(scenePath, 'utf8') === scene);
-  check('nothing pending after opening (baseline = graph)', JSON.stringify(await page.evaluate('window.__PIX3_DEBUG__.pending()')) === '{}', await page.evaluate('window.__PIX3_DEBUG__.pending()'));
-  console.log('ERRORS', JSON.stringify(await page.evaluate('window.__PIX3_DEBUG__.errors().slice(0,4)')).slice(0, 1500), JSON.stringify(page.console.filter(c => /svg|texture|Texture/i.test(c.text)).slice(0, 5).map(c => c.type + ' ' + c.text.slice(0, 300))));
-  writeFileSync(scenePath, original);
+  const pending = await page.evaluate('window.__PIX3_DEBUG__.pending()');
+  check('nothing pending after opening (flow positions and autoSize are not edits)', JSON.stringify(pending) === '{}', pending);
+  const errors = await page.evaluate('window.__PIX3_DEBUG__.errors().slice(0,4)');
+  check('no captured editor errors', errors.length === 0, errors);
 } catch (error) {
   check('run', false, String(error?.stack ?? error));
 } finally {
+  writeFileSync(scenePath, original);
   browser.close();
   chrome.kill();
   await server?.close();
+  await ssr.close();
   console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
   process.exit(results.every(Boolean) ? 0 : 1);
 }

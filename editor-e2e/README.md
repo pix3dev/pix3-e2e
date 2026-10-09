@@ -5,7 +5,14 @@ from their `dist/` in `../../pix3-core` — rebuild both first:
 
     (cd ../../pix3-core && npm run build -w packages/editor-core && cd packages/vite-plugin && npx tsc -p tsconfig.build.json)
 
-Project fixture (recreate before each run):
+Chrome gets a free debugging port per run (`launchChrome` in `cdp.mjs`): a fixed port let a run
+attach to another process's Chrome (a leftover of a killed run, another agent's) — the "Chrome did
+not come up" and hung runs of the first gate record. After a change in `packages/runtime`, delete
+`.vite-cache*/`: the dev server pre-bundles `@pix3/runtime` there and does not notice the source
+changed.
+
+Project fixture (recreate before each run; `proj-race/`, `proj-size/` the same way for scripts
+run in parallel with the gate):
 
     rm -rf proj && mkdir proj && cp -r ../../pix3-core/packages/create-pix3/templates/recipe-tapper-2d/files/. proj/ \
       && ln -s ../../../pix3-core/node_modules proj/node_modules \
@@ -18,9 +25,16 @@ Project fixture (recreate before each run):
 - `gate-p1.mjs` — gate P1 of plan §G.2 (write model): real drags in the viewport, idle/upper-bound
   writes, Esc, N8, N10, external same key, two tabs, close → reopen, N9 draft across a dev-server
   restart (37 checks; own port 5296 and profile). Run it on a fresh `proj/`.
-- `size-crosscheck.mjs` — write-model W2: an un-sized `Sprite2D` gets the same size in the editor
-  (decoded) as `readImageHeaderSize` gives Node (PNG/JPEG/WebP made by Chrome, 8 SVG variants).
-  Uses `proj/`; restores its `scenes/main.pix3scene`.
+- `size-crosscheck.mjs` — write-model W2 / S12 §4.2: an un-sized `Sprite2D` gets the same size in
+  the editor (decoded) as `readImageHeaderSize` gives Node (PNG/JPEG/WebP made by Chrome, 8 SVG
+  variants); every textured node type (`AnimatedSprite2D` stretch/native, `AnimatedSprite3D`,
+  `Sprite3D`, `TiledSprite2D`, `Button2D`, `Bar2D`, `Slider2D`, `Checkbox2D`) saves the same
+  node in the editor as the runtime's Node harness (loaded through Vite SSR); a `flow` column
+  with `autoSize` over un-sized sprites lays out the same; nothing is pending after opening
+  (39 checks). Uses `$PROJ_DIR` (default `proj/`); restores its `scenes/main.pix3scene`.
+- `n9-race.mjs [rounds]` — the N9 flake: stops the dev server the moment a Ctrl+S is on disk
+  (its answer is lost), edits while it is down, reopens — is the draft offered and restored?
+  Before editor-core `0c33774`: 6/6 rejected; after: offered every round. Uses `$PROJ_DIR`.
 - `esc3d.mjs` — Esc during a real 3D gizmo drag (aimed with `__PIX3_DEBUG__.screen(id)`), with a
   no-Esc control. Needs `proj3d/`: the same recipe as above with `recipe-grid-3d`.
 - `plugin-barrier.mjs` — plugin-only S1 counter-example (needs its own `proj/` with a

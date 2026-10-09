@@ -1,5 +1,35 @@
 // Minimal raw-CDP client over `ws` (no playwright): browser connection + per-target sessions.
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import WebSocket from 'ws';
+
+const CHROME_SH = new URL('../chrome.sh', import.meta.url).pathname;
+
+/** A TCP port nothing listens on now (the OS picks it). */
+export const freePort = () =>
+  new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+
+/**
+ * Headless Chrome on a port of its own, and the browser connected to it. A fixed port let a run
+ * connect to another process's Chrome (a leftover from a killed run, another agent's) — the
+ * gate's "Chrome did not come up" and a run that hung on someone else's tabs.
+ */
+export async function launchChrome(profileDir, args = []) {
+  const port = await freePort();
+  const chrome = spawn(CHROME_SH, [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, ...args, 'about:blank'], { stdio: 'ignore' });
+  // A run killed from outside (`timeout`, Ctrl+C) must not leave its Chrome behind.
+  process.once('exit', () => chrome.kill());
+  for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => process.exit(130));
+  const browser = await Browser.connect(port);
+  return { chrome, browser, port };
+}
 
 export class Browser {
   constructor(ws) {

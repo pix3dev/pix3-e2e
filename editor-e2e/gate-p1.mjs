@@ -2,12 +2,11 @@
 // drag / idle / Esc / continuous edits / N10 / N8 / Ctrl+Z / external same key / two tabs /
 // close → reopen / N9 draft. Real input over CDP; judged by state (bridge, DOM, bytes on disk,
 // network) — AGENTS.md rule 10. Plugin-level rows (N6 kill between renames, N4) are specs.
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer } from 'vite';
 import { pix3 } from '/data/igor.gritsenko/projects/pix3-stuff/pix3-core/packages/vite-plugin/dist/index.js';
-import { Browser } from './cdp.mjs';
+import { launchChrome } from './cdp.mjs';
 
 const HERE = import.meta.dirname;
 const PROJ = join(HERE, 'proj');
@@ -48,8 +47,7 @@ const startServer = async () => {
 };
 mkdirSync(join(HERE, 'profile-gate'), { recursive: true });
 await startServer();
-const chrome = spawn('/data/igor.gritsenko/projects/pix3-stuff/pix3-core-spikes/chrome.sh', ['--remote-debugging-port=9366', `--user-data-dir=${join(HERE, 'profile-gate')}`, '--window-size=1600,1000', 'about:blank'], { stdio: 'ignore' });
-const browser = await Browser.connect(9366);
+const { chrome, browser } = await launchChrome(join(HERE, 'profile-gate'), ['--window-size=1600,1000']);
 
 /** An editor tab with its write log: every PUT/changeset request and every 412 answer. */
 const openEditor = async name => {
