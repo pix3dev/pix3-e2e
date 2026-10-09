@@ -7,3 +7,6 @@ w-skeleton/.chrome-profile/
 *.log
 s12-patch/dist/*.mjs
 s12-patch/dist/dumps/
+bridge-e2e/proj/
+bridge-e2e/home/
+bridge-e2e/profile*/

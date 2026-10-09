@@ -17,4 +17,9 @@ repository itself is never modified from here. Reports live in `reports/`.
 - `build-check/` — P1 artifact check (plan §B.6): build a template project with `@pix3/vite-plugin`
   from a pix3-core checkout and open the single-file html via `vite preview`, `file://` and a
   sandboxed iframe (`node build-check/run.mjs [--core ../pix3-core] [--template <name>]`).
+- `bridge-e2e/` — P1 agent bridge end to end (plan §D, `pix3-core/.plans/agent-bridge.md`): `setup.sh`
+  makes a project with `pix3 new` from a pix3-core checkout, `run.mjs` runs `pix3 editor` (detached
+  Vite + headless Chrome on a free port) and `pix3 agent-setup`, then drives chrome-devtools-mcp
+  from the written `.mcp.json` through `mcp.mjs`: 3p tools, sync with `expect`, play ownership,
+  inline fallback (`node bridge-e2e/run.mjs [--core <checkout>]`).
 - `reports/` — `pix3-core-p0-{w,s1,s12,human}.md`.
