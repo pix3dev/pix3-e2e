@@ -14,4 +14,7 @@ repository itself is never modified from here. Reports live in `reports/`.
   plus the S4 3p-tool registration.
 - `s1-one-instance/` — S1: one runtime instance, no editor reload, sync barrier.
 - `s12-patch/` — S12: `ScenePatchWriter` + `norm` prototype.
+- `build-check/` — P1 artifact check (plan §B.6): build a template project with `@pix3/vite-plugin`
+  from a pix3-core checkout and open the single-file html via `vite preview`, `file://` and a
+  sandboxed iframe (`node build-check/run.mjs [--core ../pix3-core] [--template <name>]`).
 - `reports/` — `pix3-core-p0-{w,s1,s12,human}.md`.
