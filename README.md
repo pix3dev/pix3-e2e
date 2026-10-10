@@ -28,4 +28,10 @@ repository itself is never modified from here. Reports live in `reports/`.
   runs its Vite + headless Chrome on free ports and checks sync stamps, the inspector field, no
   reload, bot policies added/changed/deleted (also during play), no `/@vite/client`, and the
   contract-B negative control (`node scripts-e2e/run.mjs [--core <checkout>]`).
+- `remote-e2e/` — Remote SSH (`pix3-core/.plans/agent-bridge.md` A20–A23): two HOMEs on this box
+  (the "remote" with `SSH_CONNECTION`, the project and Vite; the "local" with headless Chrome
+  behind the token proxy), two non-1:1 TCP forwards standing in for VS Code's and the SSH
+  `RemoteForward`; chrome-devtools-mcp 1.10.1 from the remote `.mcp.json` reaches the tab through
+  the forward with the token and is refused without it (`./remote-e2e/setup.sh`, then
+  `node remote-e2e/run.mjs [--core <checkout>]`; default checkout `../pix3-core-ssh`).
 - `reports/` — `pix3-core-p0-{w,s1,s12,human}.md`.
