@@ -24,7 +24,9 @@ run in parallel with the gate):
   bridge sync, agent play → stale sync, second tab read-only + take over, menus (19 checks).
 - `gate-p1.mjs` — gate P1 of plan §G.2 (write model): real drags in the viewport, idle/upper-bound
   writes, Esc, N8, N10, external same key, two tabs, close → reopen, N9 draft across a dev-server
-  restart (37 checks; a free port and its own profile). Run it on a fresh `proj/`.
+  restart (37 checks; a free port and its own profile). Makes `proj/`, `.vite-cache-gate/` and
+  `profile-gate/` afresh each run — a `proj/` an earlier run left (the node moved off the press
+  point) failed it 6/10 with "Invalid parameters".
   `PIX3_CDP_PROXY=1` runs it through the P2 CDP token proxy: Chrome is launched by the CLI's
   Chrome owner over `--remote-debugging-pipe` and this harness connects with the token
   (`launchBehindProxy` in `cdp.mjs`).

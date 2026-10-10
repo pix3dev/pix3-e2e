@@ -3,7 +3,7 @@
 // close → reopen / N9 draft. Real input over CDP; judged by state (bridge, DOM, bytes on disk,
 // network) — AGENTS.md rule 10. Plugin-level rows (N6 kill between renames, N4) are specs.
 // `PIX3_CDP_PROXY=1` runs it through the P2 CDP token proxy (cdp.mjs `launchBehindProxy`).
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer } from 'vite';
 import { pix3 } from '/data/igor.gritsenko/projects/pix3-stuff/pix3-core/packages/vite-plugin/dist/index.js';
@@ -47,6 +47,14 @@ const startServer = async () => {
   server = await createServer({ configFile: false, root: PROJ, logLevel: 'warn', cacheDir: join(HERE, '.vite-cache-gate'), plugins: [pix3()], server: { port: PORT, strictPort: true, host: '127.0.0.1' } });
   await server.listen();
 };
+// A fresh fixture, Vite cache and profile every run: the gate starts from the recipe's bytes with
+// the node at the press point. A `proj/` an earlier run left behind (the node moved, Board renamed)
+// made the first press miss the node — no drag, then NaN coordinates ("Invalid parameters").
+const CORE = join(HERE, '../../pix3-core');
+for (const dir of [PROJ, join(HERE, '.vite-cache-gate'), join(HERE, 'profile-gate')]) rmSync(dir, { recursive: true, force: true });
+cpSync(join(CORE, 'packages/runtime/fixtures/scene-corpus/recipe-tapper-2d/files'), PROJ, { recursive: true });
+symlinkSync(join(CORE, 'node_modules'), join(PROJ, 'node_modules'));
+writeFileSync(join(PROJ, 'index.html'), '<!doctype html><html><body><div id="app"></div></body></html>\n');
 mkdirSync(join(HERE, 'profile-gate'), { recursive: true });
 await startServer();
 const { chrome, browser } = await launchChrome(join(HERE, 'profile-gate'), ['--window-size=1600,1000']);
@@ -156,6 +164,7 @@ try {
   const g1 = await drag(pageA, { stepMs: 80 });
   const p1 = await pos(pageA, NODE);
   check('drag moves the node in memory', p1 && (p1.x !== p0.x || p1.y !== p0.y), { p0, p1 });
+  if (!p1 || p1.x === p0.x) throw new Error('the first drag did not move the node — nothing to measure the gate against');
   pxPerWorld = 80 / (p1.x - p0.x);
   check('Drag: no PUT during the drag', writesBetween(pageA, g1.t0, g1.t1).length === 0, { dragMs: g1.t1 - g1.t0, writes: pageA.writes.length });
   const idle = await waitUntil(() => disk() !== ORIGINAL, 4000, 20);
