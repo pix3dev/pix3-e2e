@@ -1,0 +1,8 @@
+{
+  "name": "pix3-build-check-vite7",
+  "private": true,
+  "description": "Vite 7 (rollup) for the build matrix: `run.mjs --vite 7` builds the starter with this Vite and the checkout's plugin.",
+  "dependencies": {
+    "vite": "^7"
+  }
+}

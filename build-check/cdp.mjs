@@ -1,8 +1,7 @@
 // Minimal raw-CDP client (from pix3-core-spikes/editor-e2e/cdp.mjs) plus auto-attach to child
-// targets, which a sandboxed opaque-origin iframe is in Chrome 155 (site isolation).
+// targets, which a sandboxed opaque-origin iframe is in Chrome 155 (site isolation). Speaks over
+// Node's own WebSocket (Node ≥ 22), so it needs no package and no checkout path.
 import { writeFileSync } from 'node:fs';
-
-import WebSocket from '/data/igor.gritsenko/projects/pix3-stuff/pix3-core/.claude/worktrees/agent-a68d3158fd7aea1f3/node_modules/ws/wrapper.mjs';
 
 export class Browser {
   constructor(ws) {
@@ -10,8 +9,8 @@ export class Browser {
     this.id = 0;
     this.pending = new Map();
     this.sessions = new Map();
-    ws.on('message', raw => {
-      const msg = JSON.parse(String(raw));
+    ws.addEventListener('message', event => {
+      const msg = JSON.parse(String(event.data));
       if (msg.id !== undefined) {
         const p = this.pending.get(msg.id);
         if (!p) return;
@@ -34,8 +33,11 @@ export class Browser {
       }
     }
     if (!info) throw new Error('chrome did not come up');
-    const ws = new WebSocket(info.webSocketDebuggerUrl, { perMessageDeflate: false });
-    await new Promise((res, rej) => (ws.once('open', res), ws.once('error', rej)));
+    const ws = new WebSocket(info.webSocketDebuggerUrl);
+    await new Promise((res, rej) => {
+      ws.addEventListener('open', res, { once: true });
+      ws.addEventListener('error', () => rej(new Error('CDP websocket failed to open')), { once: true });
+    });
     return new Browser(ws);
   }
 

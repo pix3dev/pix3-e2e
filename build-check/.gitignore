@@ -1,3 +1,5 @@
 proj/
+profile*/
+vite7/node_modules/
 *.png
 *.log
