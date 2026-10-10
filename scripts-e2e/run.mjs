@@ -258,10 +258,20 @@ try {
   // through the hop scene's changeScene as one instance; a restart builds a fresh one.
   const hopStart = await call('pix3_play', { action: 'start', scenePath: 'res://scenes/hop.pix3scene' });
   check('agent play starts on the hop scene', hopStart.ok, hopStart);
-  await sleep(300);
-  // Play runs in real time from the start, so the hop (frame 10) may be behind us already: run to a
-  // tick count well past it and read which scenes the one singleton has seen.
-  const hop = await call('pix3_game_run', { until: [{ kind: 'gameState', path: 'ticks', op: 'gte', value: 60 }], maxFrames: 600, maxWallMs: 15000 });
+  // The hop (frame 10) is an async scene load — Vite serves hop-second.pix3scene — and a stepped
+  // run is in manual time, yielding to the event loop once per 30 frames: a hop that falls inside
+  // the run never lands within it (seen 1 run in 3: 90 ticks, scenes still ['Hop Root']). So wait
+  // for the hop in real time first — one stepped frame per probe, real-time play in between.
+  let probe = null;
+  const hopped = await waitUntil(async () => {
+    probe = (await call('pix3_game_run', { until: [{ kind: 'frames', n: 1 }], maxFrames: 1, maxWallMs: 1000 })).game?.snapshot ?? null;
+    return probe?.scene === 'Second Root';
+  }, 10000);
+  check('the hop scene changed to the second scene in real-time play', hopped.ms >= 0, { ms: hopped.ms, probe });
+  // Then run 30 ticks past where the probe left it (a target already met at frame 0 is
+  // PRECONDITION ALREADY MET, not a run) and read which scenes the one singleton has seen.
+  const hopTarget = Math.max(60, (probe?.ticks ?? 0) + 30);
+  const hop = await call('pix3_game_run', { until: [{ kind: 'gameState', path: 'ticks', op: 'gte', value: hopTarget }], maxFrames: 600, maxWallMs: 15000 });
   const hopState = hop.game?.snapshot;
   check('the autoload counter ticks through changeScene as one instance', hop.ok && /^PASS/.test(String(hop.verdict)) && JSON.stringify(hopState?.scenes) === JSON.stringify(['Hop Root', 'Second Root']) && hopState?.scene === 'Second Root' && hopState?.ticks >= 60, { verdict: hop.verdict, snapshot: hopState });
   const later = await call('pix3_game_run', { until: [{ kind: 'gameState', path: 'ticks', op: 'gte', value: (hopState?.ticks ?? 0) + 30 }], maxFrames: 600, maxWallMs: 15000 });
