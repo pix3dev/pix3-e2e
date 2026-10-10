@@ -5,7 +5,9 @@
 //
 //   A. a scene in the margin form: drag `panel`'s east handle → the diff is the one `width:` line,
 //      the children's lines are byte-identical, a fresh tab lays the children out where the live
-//      graph had them; the inspector shows the knob's `Right` margin and no `Left` row.
+//      graph had them; the inspector shows the knob's `Right` margin and no `Left` row. A
+//      `Checkbox2D` stretched across (W23) takes its side from the span: it grows with the panel
+//      and writes no `size:` line.
 //   B. the same scene in the legacy form: the first write converts it (margins in, positions of
 //      the anchored axes `0`, the stretched bar's `width` gone, the panel's width) with every
 //      comment kept; a fresh tab agrees with the live graph; a second resize is one line again.
@@ -93,6 +95,12 @@ root:
               color: "#ffffff"
               transform: { position: [0, 50], scale: [1, 1], rotation: 0 } # y authored (centre axis)
               layout: { enabled: true, horizontalAlign: right, right: 10 }
+          - id: check
+            type: Checkbox2D
+            name: Check # a square stretched across: its side is the span (W23), no size: line
+            properties:
+              transform: { position: [0, 0], scale: [1, 1], rotation: 0 }
+              layout: { enabled: true, horizontalAlign: stretch, verticalAlign: top, left: 250, right: 250, top: 80 }
 `;
 // The same panel as every scene before W21 wrote it: rects against the parent's authored size.
 const LEGACY = MARGINS.replace('in the margin form (W21)', 'in the legacy form')
@@ -191,6 +199,11 @@ try {
   if (!widthA.v) throw new Error('the handle drag did not resize the panel — nothing to measure');
   const after = await rects(page, CHILDREN);
   const grew = widthA.v - 600;
+  // The DTO's properties are what the file gets (no derived size), so the side is read from the
+  // placement: a top-anchored square's centre sits `top + side / 2` below the panel's top edge.
+  const sideOf = async (pg, id) => 2 * (400 / 2 - 80 - (await live(pg, id)).y);
+  const squareA = await sideOf(page, 'check');
+  check('A: the stretched Checkbox2D took the new span as its side (W23)', Math.abs(squareA - (100 + grew)) < 1e-2, { side: squareA, grew });
   check('A: the children followed their margins in memory', Math.abs(after.title.x - (-180 - grew / 2)) < 1e-2 && Math.abs(after.knob.x - (270 + grew / 2)) < 1e-2 && after.title.y === 160 && after.knob.y === 50, { grew, after });
   const flushedA = await waitUntil(() => disk('margins.pix3scene') !== originalA, 4000);
   check('A: the flush reached the disk', flushedA.v, { ms: flushedA.ms });
@@ -212,6 +225,8 @@ try {
   pageB = await openEditor('A2', 'margins.pix3scene');
   const reloaded = await rects(pageB, CHILDREN);
   check('A: a fresh tab lays the children out as the live graph had them', CHILDREN.every(id => reloaded[id].x === after[id].x && reloaded[id].y === after[id].y), { reloaded, after });
+  const squareReloaded = await sideOf(pageB, 'check');
+  check('A: …and the Checkbox2D at the same side, from the file with no size: line', Math.abs(squareReloaded - squareA) < 1e-2 && !/^\s+size:/m.test(disk('margins.pix3scene')), { squareReloaded, squareA });
   await closePage(pageB); pageB = null;
 
   // --- B. the legacy form: the first write converts the file ---------------------------------------
