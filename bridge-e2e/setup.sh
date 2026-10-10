@@ -10,8 +10,11 @@ CORE="$(cd "${1:-$HERE/../../pix3-core-bridge}" && pwd)"
 PROJ="$HERE/proj"
 rm -rf "$PROJ"
 # `pix3 new` from the checkout: the template, pix3project.yaml and the agent kit (with the
-# pix3-editor skill) exactly as a user gets them.
-(cd "$HERE" && node "$CORE/packages/cli/src/index.ts" new recipe-tapper-2d proj --name bridge-e2e)
+# pix3-editor skill) exactly as a user gets them. The recipes left create-pix3 (owner decision
+# 2026-10-10); the tapper lives on in the runtime's scene corpus, which `pix3 new` reads through
+# PIX3_TEMPLATES_DIR.
+(cd "$HERE" && PIX3_TEMPLATES_DIR="$CORE/packages/runtime/fixtures/scene-corpus" \
+  node "$CORE/packages/cli/src/index.ts" new recipe-tapper-2d proj --name bridge-e2e)
 ln -s "$CORE/node_modules" "$PROJ/node_modules"
 cat > "$PROJ/index.html" <<'HTML'
 <!doctype html><html><body><div id="app"></div></body></html>

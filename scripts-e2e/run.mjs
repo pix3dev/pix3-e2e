@@ -5,26 +5,32 @@
 // agent's calls go through `__PIX3_DEBUG__.call` (the bridge's inline transport, same table as
 // the 3p tools). Checks:
 //   - no /@vite/client among the editor page's resources (and pix3_status.viteClient false);
+//   - an inspector commit (the Title label) reads back through pix3_scene before any sync: the
+//     node's properties, saved and the tree agree with the inspector, and the file gets it;
+//   - the placed Mover component becomes an instance of the edited class on sync (config kept,
+//     scene clean); a dirty scene keeps its unsaved Speed edit through a swap Vite's re-import
+//     triggers, and the next sync writes exactly that edit;
 //   - a script and the nested module it imports edited → pix3_sync ok, executed stamps = sha on
 //     disk, the inspector shows the new field, the page never reloaded;
 //   - bot policies: a run uses the policy; a policy added during play → sync ok (no restart) and a
 //     run uses it; its helper outside bots/ changed → stale until restart, then the run sees it;
 //     the policy deleted → sync ok, a run refuses it;
 //   - negative control: a script with a CSS import → `pix3 check` warns W_EDITOR_CSS_IMPORT, the
-//     sync answer carries viteClient:true.
+//     sync answer carries viteClient:true; the same check type-checks the policy written
+//     `satisfies BotPolicy` against the kit's design/tests/bots/pix3-test-bot.d.ts.
 // Everything started here (Vite, Chrome) is stopped at the end.
 //
 // Usage: ./setup.sh [<core>] && node run.mjs [--core <pix3-core checkout>]
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { freePort, launchChrome } from '../editor-e2e/cdp.mjs';
 
 const HERE = import.meta.dirname;
 const coreFlag = process.argv.indexOf('--core');
-const CORE = resolve(coreFlag >= 0 ? process.argv[coreFlag + 1] : join(HERE, '..', '..', 'pix3-core-scripts'));
+const CORE = resolve(coreFlag >= 0 ? process.argv[coreFlag + 1] : join(HERE, '..', '..', 'pix3-core'));
 const PROJ = join(HERE, 'proj');
 
 const results = [];
@@ -117,6 +123,26 @@ try {
   const status0 = await call('pix3_status');
   check('pix3_status.viteClient is false', status0.viteClient === false, { viteClient: status0.viteClient, scriptsStatus: status0.scriptsStatus });
 
+  // 1b. An inspector commit, read back through pix3_scene before any sync: the node's
+  // `properties` and `saved` both carry the new label, and so does the file once flushed.
+  await click('[data-node-id="title"]');
+  const labelInput = `(() => { ${DEEP} return deep(document, 'pix3-inspector-panel input').find(i => i.value === 'Play'); })()`;
+  const hasInput = await waitUntil(async () => page.evaluate(`!!${labelInput}`), 5000);
+  check('inspector shows the Title label field', hasInput.v);
+  await page.evaluate(`${labelInput}.focus(), ${labelInput}.select()`);
+  await page.send('Input.insertText', { text: 'Coins' });
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await page.evaluate(`document.activeElement?.blur?.()`);
+  const committed = await waitUntil(async () => (await call('pix3_status')).dirty?.length > 0 || readFileSync(join(PROJ, 'scenes/main.pix3scene'), 'utf8').includes('label: Coins'), 5000);
+  const titleRead = await call('pix3_scene', { nodeId: 'title' });
+  check('pix3_scene right after the inspector commit: properties.label is the new one', titleRead.node?.properties?.label === 'Coins', { properties: titleRead.node?.properties, committed: committed.v });
+  check('…and saved.properties.label too', titleRead.saved?.properties?.label === 'Coins', titleRead.saved?.properties);
+  const titleTree = await call('pix3_scene', { maxDepth: 3 });
+  const treeTitle = titleTree.scene?.children?.[0]?.children?.find(c => c.nodeId === 'title');
+  check('…and the tree read', treeTitle?.properties?.label === 'Coins', treeTitle?.properties);
+  const flushed = await call('pix3_sync', { timeoutMs: 10000 });
+  check('the file gets the same label', flushed.ok && /label: Coins/.test(readFileSync(join(PROJ, 'scenes/main.pix3scene'), 'utf8')), flushed);
+
   // 2. The component's fields come from a nested module.
   await click('[data-node-id="background"]');
   const speed = await waitUntil(async () => (await inspectorText()).includes('Speed'), 5000);
@@ -125,7 +151,9 @@ try {
 
   // 3. Edit the script and the nested module it imports, then sync.
   const mover = readFileSync(join(PROJ, 'scripts/Mover.ts'), 'utf8');
-  write('scripts/Mover.ts', mover.replace("label: 'Mover', expanded: true", "label: 'Mover', expanded: true /* v2 */"));
+  const moverBefore = (await call('pix3_scene', { nodeId: 'background' })).node?.components?.[0];
+  check('the live Mover is the first version', moverBefore?.state?.revision === undefined && moverBefore?.state?.config?.speed === 3, moverBefore);
+  write('scripts/Mover.ts', mover.replace("label: 'Mover', expanded: true", "label: 'Mover', expanded: true /* v2 */").replace('export class Mover extends Script {', "export class Mover extends Script {\n  readonly revision = 'v2';"));
   write('src/game/fields.ts', "export const FIELDS = [\n  { name: 'speed', label: 'Speed' },\n  { name: 'jumpHeight', label: 'Jump Height' },\n];\n");
   const t0 = Date.now();
   const synced = await syncOk(['scripts/Mover.ts', 'src/game/fields.ts']);
@@ -135,6 +163,34 @@ try {
   check('executed stamp of the nested module = sha on disk', stamps['src/game/fields.ts'] === sha('src/game/fields.ts'));
   const jump = await waitUntil(async () => (await inspectorText()).includes('Jump Height'), 5000);
   check('inspector shows the new field', jump.v, { ms: jump.ms });
+  const moverAfter = (await call('pix3_scene', { nodeId: 'background' })).node?.components?.[0];
+  check('the live Mover component is an instance of the edited class, config kept', moverAfter?.state?.revision === 'v2' && moverAfter?.state?.config?.speed === 3 && moverAfter?.state?.id === 'mover', moverAfter);
+  const afterSwap = await call('pix3_status');
+  check('…the scene stays clean, nothing pending', afterSwap.dirty?.length === 0 && Object.keys(afterSwap.pending ?? {}).length === 0, { dirty: afterSwap.dirty, pending: afterSwap.pending });
+
+  // 3b. A dirty scene through a script swap: an unsaved inspector edit of Speed, then the script
+  // changes again and Vite re-imports it (no sync, so nothing flushes first) — the new instance
+  // carries the edit, the scene stays dirty, and the next sync writes exactly that edit.
+  // Speed is a pix3-number-field (scrub control): a plain click opens its text input.
+  const speedField = `(() => { ${DEEP} const group = deep(document, '.script-prop-group')[0]; return group && deep(group, 'pix3-number-field')[0]; })()`;
+  await waitUntil(async () => page.evaluate(`!!${speedField}`), 5000);
+  const at = await page.evaluate(`(() => { const r = ${speedField}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) await page.send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
+  const speedInput = `${speedField}.shadowRoot.querySelector('input')`;
+  await waitUntil(async () => page.evaluate(`!!${speedInput}`), 3000);
+  await page.evaluate(`${speedInput}.focus(), ${speedInput}.select()`);
+  await page.send('Input.insertText', { text: '9' });
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  const dirtyBefore = (await call('pix3_status')).dirty;
+  write('scripts/Mover.ts', readFileSync(join(PROJ, 'scripts/Mover.ts'), 'utf8').replace("readonly revision = 'v2';", "readonly revision = 'v3';"));
+  const v3 = await waitUntil(async () => (await call('pix3_scene', { nodeId: 'background' })).node?.components?.[0]?.state?.revision === 'v3', 5000);
+  const dirtySwap = await call('pix3_status');
+  const moverV3 = (await call('pix3_scene', { nodeId: 'background' })).node?.components?.[0];
+  check('a dirty scene: the swap keeps the unsaved edit and the dirty mark', dirtyBefore?.length === 1 && v3.v && moverV3?.state?.config?.speed === 9 && dirtySwap.dirty?.length === 1, { dirtyBefore, ms: v3.ms, config: moverV3?.state?.config, dirty: dirtySwap.dirty, pending: dirtySwap.pending });
+  const sceneBeforeFlush = readFileSync(join(PROJ, 'scenes/main.pix3scene'), 'utf8');
+  const flushedEdit = await syncOk(['scripts/Mover.ts']);
+  const sceneAfterFlush = readFileSync(join(PROJ, 'scenes/main.pix3scene'), 'utf8');
+  check('…the next sync writes exactly that edit', flushedEdit.ok && sceneAfterFlush === sceneBeforeFlush.replace('speed: 3', 'speed: 9'), flushedEdit);
   check('the editor did not reload', (await page.evaluate('window.__marker')) === 'never-reloaded' && page.navigations.length === navigationsAtStart, page.navigations);
 
   // 4. Bot policies.
@@ -183,6 +239,9 @@ try {
   } catch {
     // printed below
   }
+  check('the kit shipped design/tests/bots/pix3-test-bot.d.ts', existsSync(join(PROJ, 'design/tests/bots/pix3-test-bot.d.ts')));
+  const typeErrors = report?.diagnostics?.filter(d => d.code === 'E_TYPE') ?? null;
+  check('pix3 check type-checks the policy (satisfies BotPolicy) with no E_TYPE', report?.typecheck?.ok === true && typeErrors?.length === 0 && report.files.some(f => f.file === 'design/tests/bots/idle.ts'), { typecheck: report?.typecheck, typeErrors });
   const cssWarn = report?.diagnostics?.find(d => d.code === 'W_EDITOR_CSS_IMPORT');
   check('pix3 check warns W_EDITOR_CSS_IMPORT for scripts/Styled.ts', cssWarn?.file === 'scripts/Styled.ts' && cssWarn.line === 1, cssWarn ?? checked.stderr.slice(0, 400));
   const broken = await syncOk(['scripts/Styled.ts']);

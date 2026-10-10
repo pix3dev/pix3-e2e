@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Recreate the scripts-e2e project (pix3-core `.plans/scripts-vite.md`): an empty 2D project made by
-# `pix3 new 2d` from a pix3-core checkout (default ../../pix3-core-scripts; pass another as $1),
+# `pix3 new 2d` from a pix3-core checkout (default ../../pix3-core; pass another as $1),
 # plus one script component whose schema comes from a nested module outside scripts/, and one bot
 # policy with a helper outside design/tests/bots/. node_modules is a symlink into the checkout, so
 # the plugin and the editor come from its packages' dist/ — build them first:
 #   (cd <core> && npm run build -w packages/editor-core && npm run build -w packages/vite-plugin)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-CORE="$(cd "${1:-$HERE/../../pix3-core-scripts}" && pwd)"
+CORE="$(cd "${1:-$HERE/../../pix3-core}" && pwd)"
 PROJ="$HERE/proj"
 rm -rf "$PROJ"
 (cd "$HERE" && node "$CORE/packages/cli/src/index.ts" new 2d proj --name scripts-e2e >/dev/null)
@@ -57,16 +57,17 @@ TS
 cat > "$PROJ/design/tests/bots/idle.ts" <<'TS'
 import { MARK } from '../lib/mark.ts';
 
+// Typed by the kit's design/tests/bots/pix3-test-bot.d.ts (global BotPolicy / Pix3TestBot).
 export default {
   name: 'idle',
-  tick(bot: { frame: number; log(e: string): void; done(p: boolean, r: string): void }) {
+  tick(bot) {
     if (bot.frame === 1) bot.log(`idle ${MARK}`);
     if (bot.frame >= 3) bot.done(true, `idle ${MARK}`);
   },
-};
+} satisfies BotPolicy;
 TS
 
-# The background node carries the component.
+# The background node carries the component; a Title label sits next to it.
 python3 - "$PROJ/scenes/main.pix3scene" <<'PY'
 import sys
 path = sys.argv[1]
@@ -74,6 +75,8 @@ text = open(path).read()
 anchor = "            verticalAlign: stretch\n        children: []\n"
 assert anchor in text, 'starter scene changed: update setup.sh'
 text = text.replace(anchor, "            verticalAlign: stretch\n        components:\n          - id: mover\n            type: user:Mover\n            enabled: true\n            config:\n              speed: 3\n        children: []\n")
+# A label the inspector edits (pix3_scene must answer what the inspector and the file have).
+text = text.rstrip('\n') + "\n      - id: title\n        type: Label2D\n        name: Title\n        properties:\n          label: Play\n          width: 400\n          height: 80\n"
 open(path, 'w').write(text)
 PY
 echo "scripts-e2e project in $PROJ (core: $CORE)"

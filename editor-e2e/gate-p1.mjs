@@ -69,7 +69,7 @@ const openEditor = async name => {
     if (method === 'Network.loadingFailed' && page.reqs.has(params.requestId)) page.reqs.get(params.requestId).status = 'failed:' + params.errorText;
   };
   await page.navigate(`${BASE}/__pix3/`);
-  await page.waitFor(`!!window.__PIX3_DEBUG__ && !!window.__PIX3_DEBUG__.status().activeScene`, 60000);
+  await page.waitFor(`(async () => (!!window.__PIX3_DEBUG__ && !!(await window.__PIX3_DEBUG__.status()).activeScene))()`, 60000);
   await sleep(800);
   return page;
 };
@@ -87,7 +87,7 @@ const key = async (page, keyName, code, vk, modifiers = 0) => {
 const blur = page => page.evaluate(`(() => { ${DEEP} for (const el of deep(document, 'input, textarea')) el.blur(); document.activeElement?.blur?.(); return true; })()`);
 const ctrl = (page, letter) => key(page, letter, `Key${letter.toUpperCase()}`, letter.toUpperCase().charCodeAt(0), 2);
 const canvasRect = page => page.evaluate(`(() => { ${DEEP} const c = deep(document, 'canvas.viewport-canvas')[0]; const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })()`);
-const pos = async (page, id) => (await page.evaluate(`window.__PIX3_DEBUG__.node(${JSON.stringify(id)})?.transform?.position ?? null`));
+const pos = async (page, id) => (await page.evaluate(`(async () => ((await window.__PIX3_DEBUG__.node(${JSON.stringify(id)}))?.transform?.position ?? null))()`));
 const NODE = 'board-floor';
 /** Screen px per world unit, measured on the first drag (the move follows the pointer 1:1). */
 let pxPerWorld = null;
@@ -147,7 +147,7 @@ const ORIGINAL = disk();
 let pageA, pageB, pageC, pageD;
 try {
   pageA = await openEditor('A');
-  check('A is the writer', (await pageA.evaluate(`window.__PIX3_DEBUG__.status().writer`)) === 'self');
+  check('A is the writer', (await pageA.evaluate(`(async () => ((await window.__PIX3_DEBUG__.status()).writer))()`)) === 'self');
 
   // --- Drag + idle ------------------------------------------------------------------------------
   const p0 = await pos(pageA, NODE);
@@ -168,7 +168,7 @@ try {
   await ctrl(pageA, 'z');
   const undone = await waitUntil(async () => { const p = await pos(pageA, NODE); return p && p.x === p0.x && p.y === p0.y; }, 2000);
   check('Ctrl+Z after flush: undone in memory', undone.v);
-  check('Ctrl+Z after flush: the scene is dirty again', (await pageA.evaluate(`window.__PIX3_DEBUG__.status().dirty.length`)) === 1);
+  check('Ctrl+Z after flush: the scene is dirty again', (await pageA.evaluate(`(async () => ((await window.__PIX3_DEBUG__.status()).dirty.length))()`)) === 1);
   const back = await waitUntil(() => disk() === ORIGINAL, 4000);
   check('Ctrl+Z after flush: the next flush writes it (file back to the original bytes)', back.v, { ms: back.ms });
 
@@ -193,7 +193,7 @@ try {
   check('the node the agent changed is highlighted in the scene tree', lit.v, { ms: lit.ms });
   const n8 = await waitUntil(() => { const t = disk(); return t.includes('Game Background (agent)') && changedLines(ORIGINAL, t) === 2; }, 8000);
   check('N8: on disk x=0 (the undo) and the agent rename', n8.v, { ms: n8.ms, diff: changedLines(ORIGINAL, disk()) });
-  const graphName = await pageA.evaluate(`window.__PIX3_DEBUG__.node('game-background')?.name`);
+  const graphName = await pageA.evaluate(`(async () => (await window.__PIX3_DEBUG__.node('game-background'))?.name)()`);
   check('N8: the editor graph has the agent rename', graphName === 'Game Background (agent)', graphName);
 
   // --- N10: designer edit, the agent syncs at once and reads ----------------------------------------
@@ -205,7 +205,7 @@ try {
   // --- External write of the same key while dirty ---------------------------------------------------
   await rename(pageA, 'board', 'Board Designer');
   agentEdit('name: Board N10', 'name: Board Agent');
-  const merged = await waitUntil(async () => (await pageA.evaluate(`window.__PIX3_DEBUG__.node('board')?.name`)) === 'Board Agent', 6000);
+  const merged = await waitUntil(async () => (await pageA.evaluate(`(async () => (await window.__PIX3_DEBUG__.node('board'))?.name)()`)) === 'Board Agent', 6000);
   check('same key: the agent value wins in the editor', merged.v, { ms: merged.ms });
   const shown = await notices(pageA);
   check('same key: a notice names the dropped key', shown.some(n => /dropped/.test(n) && /Board/.test(n)), shown);
@@ -226,7 +226,7 @@ try {
     const g = await drag(pageA, { dx: 8, dy: 0, steps: 8, stepMs: 60 });
     gestures.push(g);
     moved.push((await pos(pageA, NODE)).x !== before.x);
-    trace.push({ t: g.t1 - tFirst, st: await pageA.evaluate('(({ dirty, writer, flushing, gestureInProgress }) => ({ dirty: dirty.length, writer, flushing, g: gestureInProgress }))(window.__PIX3_DEBUG__.status())') });
+    trace.push({ t: g.t1 - tFirst, st: await pageA.evaluate('(async () => ((({ dirty, writer, flushing, gestureInProgress }) => ({ dirty: dirty.length, writer, flushing, g: gestureInProgress }))((await window.__PIX3_DEBUG__.status()))))()') });
     await sleep(400); // never 1.5 s of idle
   }
   await sleep(300);
@@ -237,11 +237,11 @@ try {
   check('continuous edits: written within 10 s of the first edit', cWrites.length > 0 && firstWrite <= 10500, { firstWriteMs: firstWrite, writes: cWrites.map(w => w.at - gestures[0].t1) });
   const during = cWrites.filter(w => gestures.some(g => w.at > g.t0 && w.at < g.t1));
   check('continuous edits: no write during a gesture', during.length === 0, { during: during.length });
-  await waitUntil(async () => (await pageA.evaluate(`window.__PIX3_DEBUG__.status().dirty.length`)) === 0, 4000);
+  await waitUntil(async () => (await pageA.evaluate(`(async () => ((await window.__PIX3_DEBUG__.status()).dirty.length))()`)) === 0, 4000);
 
   // --- Two tabs -----------------------------------------------------------------------------------------
   pageB = await openEditor('B');
-  check('second tab is read-only', (await pageB.evaluate(`window.__PIX3_DEBUG__.status().writer`)) === 'other');
+  check('second tab is read-only', (await pageB.evaluate(`(async () => ((await window.__PIX3_DEBUG__.status()).writer))()`)) === 'other');
   await drag(pageA, { dx: -60, dy: 20 });
   const pA = await pos(pageA, NODE);
   await waitUntil(() => disk().includes(String(Math.round(pA.x * 1000) / 1000).slice(0, 5)), 4000);
@@ -249,7 +249,7 @@ try {
   check('read-only tab follows the writer tab (same position)', follows.v, { ms: follows.ms });
   check('two tabs: no 412 anywhere', pageA.refused.length === 0 && pageB.refused.length === 0, [...pageA.refused, ...pageB.refused]);
   await pageB.evaluate(`window.dispatchEvent(new CustomEvent('pix3-take-over'))`);
-  const took = await waitUntil(async () => (await pageB.evaluate(`window.__PIX3_DEBUG__.status().writer`)) === 'self' && (await pageA.evaluate(`window.__PIX3_DEBUG__.status().writer`)) === 'other', 5000);
+  const took = await waitUntil(async () => (await pageB.evaluate(`(async () => ((await window.__PIX3_DEBUG__.status()).writer))()`)) === 'self' && (await pageA.evaluate(`(async () => ((await window.__PIX3_DEBUG__.status()).writer))()`)) === 'other', 5000);
   check('take over: B writes, A read-only', took.v, { ms: took.ms });
   await rename(pageB, 'board', 'Board From B');
   const bWrote = await waitUntil(() => disk().includes('name: Board From B'), 5000);
@@ -259,7 +259,7 @@ try {
   await closePage(pageA); pageA = null;
   await closePage(pageB); pageB = null;
   pageC = await openEditor('C');
-  check('new tab after closing is the writer', (await pageC.evaluate(`window.__PIX3_DEBUG__.status().writer`)) === 'self');
+  check('new tab after closing is the writer', (await pageC.evaluate(`(async () => ((await window.__PIX3_DEBUG__.status()).writer))()`)) === 'self');
   await rename(pageC, 'board', 'Board From C');
   const tSave = Date.now();
   await ctrl(pageC, 's');

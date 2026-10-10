@@ -14,7 +14,7 @@ changed.
 Project fixture (recreate before each run; `proj-race/`, `proj-size/` the same way for scripts
 run in parallel with the gate):
 
-    rm -rf proj && mkdir proj && cp -r ../../pix3-core/packages/create-pix3/templates/recipe-tapper-2d/files/. proj/ \
+    rm -rf proj && mkdir proj && cp -r ../../pix3-core/packages/runtime/fixtures/scene-corpus/recipe-tapper-2d/files/. proj/ \
       && ln -s ../../../pix3-core/node_modules proj/node_modules \
       && printf '<!doctype html><html><body><div id="app"></div></body></html>\n' > proj/index.html
     ln -sfn ../../pix3-core/node_modules node_modules
@@ -37,5 +37,10 @@ run in parallel with the gate):
   Before editor-core `0c33774`: 6/6 rejected; after: offered every round. Uses `$PROJ_DIR`.
 - `esc3d.mjs` — Esc during a real 3D gizmo drag (aimed with `__PIX3_DEBUG__.screen(id)`), with a
   no-Esc control. Needs `proj3d/`: the same recipe as above with `recipe-grid-3d`.
+
+The recipes left `create-pix3` (owner decision 2026-10-10); they live on as the scene corpus
+`packages/runtime/fixtures/scene-corpus/`. `gate-p1.mjs` speaks the async bridge v2
+(`await __PIX3_DEBUG__.status()` / `.node()`); `m3`, `esc3d`, `n9-race`, `size-crosscheck` still
+use the v1 sync calls.
 - `plugin-barrier.mjs` — plugin-only S1 counter-example (needs its own `proj/` with a
   `scripts/entry→middle→leaf` chain; see the file).
