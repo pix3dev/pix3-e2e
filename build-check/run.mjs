@@ -7,7 +7,8 @@
 // `vite preview`, `file://`, and inside `<iframe sandbox="allow-scripts">` (opaque origin, like
 // an ad container) — and judge by `window.__PIX3_PLAYER__` (status 'running', frames > 0 and
 // still counting, no errors, no page exceptions) and `window.__PIX3_CHECK__` (the second scene
-// started, the prefab's label found in it, the library's GeometryMesh constructed).
+// started, the prefab's label found in it, the library's GeometryMesh constructed, the project's
+// autoload counter ticking before and after the scene change as one instance).
 //
 //   node build-check/run.mjs [--core <pix3-core checkout>] [--template 2d|3d] [--compress]
 //                            [--vite 7|8] [--lib named|namespace] [--keep]
@@ -160,15 +161,34 @@ write('prefabs/badge.pix3scene', PREFAB);
 write(
   'scripts/MainFlow.ts',
   `import { Script } from '@pix3/runtime';
+import type { Counter } from './Counter';
 
 declare global {
   interface Window {
-    __PIX3_CHECK__?: { ticks: number; changed: boolean; second: boolean; prefabFound: boolean; libBox: boolean };
+    __PIX3_CHECK__?: {
+      ticks: number;
+      changed: boolean;
+      second: boolean;
+      prefabFound: boolean;
+      libBox: boolean;
+      counter: { attached: number; ticks: number; id: string } | null;
+      counterAtChange: { ticks: number; id: string } | null;
+      counterInSecond: { ticks: number; id: string } | null;
+    };
   }
 }
 
 export const checkState = (): NonNullable<Window['__PIX3_CHECK__']> =>
-  (window.__PIX3_CHECK__ ??= { ticks: 0, changed: false, second: false, prefabFound: false, libBox: false });
+  (window.__PIX3_CHECK__ ??= {
+    ticks: 0,
+    changed: false,
+    second: false,
+    prefabFound: false,
+    libBox: false,
+    counter: null,
+    counterAtChange: null,
+    counterInSecond: null,
+  });
 
 /** On the entry scene's root: after a few frames, change to the second scene. */
 export class MainFlow extends Script {
@@ -177,6 +197,8 @@ export class MainFlow extends Script {
     state.ticks++;
     if (state.ticks === 5 && !state.changed) {
       state.changed = true;
+      const counter = this.scene?.getAutoload<Counter>('Counter');
+      state.counterAtChange = counter ? { ticks: counter.ticks, id: counter.instanceId } : null;
       void this.scene?.changeScene('res://scenes/second.pix3scene');
     }
   }
@@ -186,6 +208,7 @@ export class MainFlow extends Script {
 write(
   'scripts/SecondFlow.ts',
   `import { Script, type NodeBase } from '@pix3/runtime';
+import { Counter } from './Counter';
 import { checkState } from './MainFlow';
 
 /** On the second scene's root: the nested prefab's label must be in the running tree. */
@@ -198,10 +221,43 @@ export class SecondFlow extends Script {
       (node as { label?: unknown }).label === 'badge' ||
       (node.children as NodeBase[]).some(child => found(child));
     state.prefabFound = roots.some(found);
+    const counter = this.scene?.getAutoload(Counter);
+    state.counterInSecond = counter ? { ticks: counter.ticks, id: counter.instanceId } : null;
   }
 }
 `
 );
+// The project's autoload: one counter for the whole session, declared in pix3project.yaml.
+write(
+  'scripts/Counter.ts',
+  `import { Script } from '@pix3/runtime';
+import { checkState } from './MainFlow';
+
+/** Autoload: ticks every frame, outlives changeScene. */
+export class Counter extends Script {
+  ticks = 0;
+  readonly instanceId = Math.random().toString(36).slice(2);
+  onAttach(): void {
+    const state = checkState();
+    state.counter = { attached: (state.counter?.attached ?? 0) + 1, ticks: 0, id: this.instanceId };
+  }
+  onUpdate(): void {
+    this.ticks++;
+    const state = checkState();
+    if (state.counter) state.counter.ticks = this.ticks;
+  }
+}
+`
+);
+{
+  const manifestPath = join(PROJ, 'pix3project.yaml');
+  const manifest = readFileSync(manifestPath, 'utf8');
+  const autoloads = 'autoloads:\n  - singleton: Counter\n    scriptPath: scripts/Counter.ts\n';
+  writeFileSync(
+    manifestPath,
+    /^autoloads: \[\]$/m.test(manifest) ? manifest.replace(/^autoloads: \[\]\n?/m, autoloads) : `${manifest.trimEnd()}\n${autoloads}`
+  );
+}
 write(
   'scripts/LibBox.ts',
   `import { Script } from '@pix3/runtime';
@@ -358,6 +414,19 @@ const judge = async (name, page) => {
   check(`${name}: status running, frames > 0 and counting`, first?.status === 'running' && alive, { first: { ...first, check: undefined }, second: { ...second, check: undefined } });
   check(`${name}: changeScene reached the second scene, the nested prefab is in it`, second?.check?.changed && second?.check?.second && second?.check?.prefabFound, second?.check);
   check(`${name}: the library's GeometryMesh was constructed`, second?.check?.libBox === true);
+  {
+    const c = second?.check;
+    check(
+      `${name}: the autoload counter ticks, survives changeScene as one instance and keeps counting`,
+      c?.counter?.attached === 1 &&
+        c?.counterAtChange?.id === c?.counter?.id &&
+        c?.counterInSecond?.id === c?.counter?.id &&
+        c.counterAtChange.ticks >= 5 &&
+        c.counterInSecond.ticks > c.counterAtChange.ticks &&
+        c.counter.ticks > (first?.check?.counter?.ticks ?? Infinity),
+      { counter: c?.counter, atChange: c?.counterAtChange, inSecond: c?.counterInSecond, before: first?.check?.counter }
+    );
+  }
   check(`${name}: no player errors, no page exceptions`, second?.errors?.length === 0 && page.errors.length === 0, { errors: second?.errors, page: page.errors.slice(0, 5), console: page.console.filter(c => c.type === 'error').slice(0, 5) });
 };
 
