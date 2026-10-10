@@ -22,4 +22,10 @@ repository itself is never modified from here. Reports live in `reports/`.
   Vite + headless Chrome on a free port) and `pix3 agent-setup`, then drives chrome-devtools-mcp
   from the written `.mcp.json` through `mcp.mjs`: 3p tools, sync with `expect`, play ownership,
   inline fallback (`node bridge-e2e/run.mjs [--core <checkout>]`).
+- `scripts-e2e/` — P1 scripts and bot policies through Vite (`pix3-core/.plans/scripts-vite.md`):
+  `setup.sh` makes a `pix3 new 2d` project from a pix3-core checkout (default `../pix3-core-scripts`)
+  with a script whose fields come from a nested module and a bot policy with a helper; `run.mjs`
+  runs its Vite + headless Chrome on free ports and checks sync stamps, the inspector field, no
+  reload, bot policies added/changed/deleted (also during play), no `/@vite/client`, and the
+  contract-B negative control (`node scripts-e2e/run.mjs [--core <checkout>]`).
 - `reports/` — `pix3-core-p0-{w,s1,s12,human}.md`.
