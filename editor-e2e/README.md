@@ -24,7 +24,18 @@ run in parallel with the gate):
   bridge sync, agent play → stale sync, second tab read-only + take over, menus (19 checks).
 - `gate-p1.mjs` — gate P1 of plan §G.2 (write model): real drags in the viewport, idle/upper-bound
   writes, Esc, N8, N10, external same key, two tabs, close → reopen, N9 draft across a dev-server
-  restart (37 checks; own port 5296 and profile). Run it on a fresh `proj/`.
+  restart (37 checks; a free port and its own profile). Run it on a fresh `proj/`.
+  `PIX3_CDP_PROXY=1` runs it through the P2 CDP token proxy: Chrome is launched by the CLI's
+  Chrome owner over `--remote-debugging-pipe` and this harness connects with the token
+  (`launchBehindProxy` in `cdp.mjs`).
+- `gate-p2.mjs` — gate P2 of plan §G.3, the rows that are not about the build: CDP without the
+  token / with a wrong one / from a page refused, Chrome without any debugging port; the window
+  minimized → `pix3_game_run` frames > 0 (inline and through chrome-devtools-mcp); kill the dev
+  server → banner, edits go on, IndexedDB draft, `pix3 editor` again → flushed; a second tab with
+  a stale `If-Match` → 412, bytes untouched (30 checks). Makes its own `proj-p2/` with
+  `pix3 new` and `home-p2/` (`PIX3_HOME`); real `pix3 editor --headless` + chrome-devtools-mcp
+  1.10.1 from `.mcp.json` + a raw CDP probe, all through the proxy, free ports.
+  `--core <checkout>` (default `../../pix3-core`).
 - `size-crosscheck.mjs` — write-model W2 / S12 §4.2: an un-sized `Sprite2D` gets the same size in
   the editor (decoded) as `readImageHeaderSize` gives Node (PNG/JPEG/WebP made by Chrome, 8 SVG
   variants); every textured node type (`AnimatedSprite2D` stretch/native, `AnimatedSprite3D`,

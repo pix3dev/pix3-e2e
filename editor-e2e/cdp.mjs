@@ -1,9 +1,11 @@
 // Minimal raw-CDP client over `ws` (no playwright): browser connection + per-target sessions.
 import { spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import WebSocket from 'ws';
 
 const CHROME_SH = new URL('../chrome.sh', import.meta.url).pathname;
+const CORE_CLI = new URL('../../pix3-core/packages/cli/src/index.ts', import.meta.url).pathname;
 
 /** A TCP port nothing listens on now (the OS picks it). */
 export const freePort = () =>
@@ -22,6 +24,7 @@ export const freePort = () =>
  * gate's "Chrome did not come up" and a run that hung on someone else's tabs.
  */
 export async function launchChrome(profileDir, args = []) {
+  if (process.env.PIX3_CDP_PROXY) return launchBehindProxy(profileDir, args);
   const port = await freePort();
   const chrome = spawn(CHROME_SH, [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, ...args, 'about:blank'], { stdio: 'ignore' });
   // A run killed from outside (`timeout`, Ctrl+C) must not leave its Chrome behind.
@@ -29,6 +32,39 @@ export async function launchChrome(profileDir, args = []) {
   for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => process.exit(130));
   const browser = await Browser.connect(port);
   return { chrome, browser, port };
+}
+
+/**
+ * `PIX3_CDP_PROXY=1` (or the path of a pix3 CLI `src/index.ts`): Chrome the way `pix3 editor`
+ * runs it since P2 — the CLI's Chrome owner launches it over --remote-debugging-pipe and serves
+ * the token proxy on a free port; this harness connects as one more client with the token
+ * (plan §D.5). Killing the owner closes the pipe, and Chrome exits with it.
+ */
+async function launchBehindProxy(profileDir, args) {
+  const port = await freePort();
+  const home = `${profileDir}-pix3-home`;
+  mkdirSync(home, { recursive: true });
+  const cli = process.env.PIX3_CDP_PROXY === '1' ? CORE_CLI : process.env.PIX3_CDP_PROXY;
+  // Extra Chrome flags ride in a wrapper; `exec` hands the pipe fds 3/4 to Chrome.
+  const wrapper = `${home}/chrome-wrapper.sh`;
+  writeFileSync(wrapper, `#!/usr/bin/env bash\nexec ${CHROME_SH} ${args.map(a => `'${a}'`).join(' ')} "$@"\n`, { mode: 0o755 });
+  const options = { chrome: wrapper, port, profile: profileDir, url: 'about:blank', headless: true };
+  const chrome = spawn(process.execPath, [cli, '__chrome-owner', JSON.stringify(options)], {
+    env: { ...process.env, PIX3_HOME: home },
+    stdio: ['ignore', 'ignore', 'inherit'],
+  });
+  process.once('exit', () => chrome.kill());
+  for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => process.exit(130));
+  let token = null;
+  for (let i = 0; i < 100 && !token; i++) {
+    try {
+      token = readFileSync(`${home}/cdp-token`, 'utf8').trim();
+    } catch {
+      await new Promise(r => setTimeout(r, 50));
+    }
+  }
+  const browser = await Browser.connect(port, token);
+  return { chrome, browser, port, token };
 }
 
 export class Browser {
@@ -50,18 +86,21 @@ export class Browser {
     });
   }
 
-  static async connect(port) {
+  static async connect(port, token = null) {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
     let info;
     for (let i = 0; i < 100; i++) {
       try {
-        info = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+        const response = await fetch(`http://127.0.0.1:${port}/json/version`, { headers });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        info = await response.json();
         break;
       } catch {
         await new Promise(r => setTimeout(r, 100));
       }
     }
     if (!info) throw new Error('chrome did not come up');
-    const ws = new WebSocket(info.webSocketDebuggerUrl, { perMessageDeflate: false });
+    const ws = new WebSocket(info.webSocketDebuggerUrl, { perMessageDeflate: false, headers });
     await new Promise((res, rej) => (ws.once('open', res), ws.once('error', rej)));
     return new Browser(ws);
   }

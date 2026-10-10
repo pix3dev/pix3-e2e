@@ -2,15 +2,17 @@
 // drag / idle / Esc / continuous edits / N10 / N8 / Ctrl+Z / external same key / two tabs /
 // close → reopen / N9 draft. Real input over CDP; judged by state (bridge, DOM, bytes on disk,
 // network) — AGENTS.md rule 10. Plugin-level rows (N6 kill between renames, N4) are specs.
+// `PIX3_CDP_PROXY=1` runs it through the P2 CDP token proxy (cdp.mjs `launchBehindProxy`).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer } from 'vite';
 import { pix3 } from '/data/igor.gritsenko/projects/pix3-stuff/pix3-core/packages/vite-plugin/dist/index.js';
-import { launchChrome } from './cdp.mjs';
+import { freePort, launchChrome } from './cdp.mjs';
 
 const HERE = import.meta.dirname;
 const PROJ = join(HERE, 'proj');
-const PORT = 5296;
+// A free port, never a fixed one: another agent runs servers and Chrome on this box too.
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const SCENE = join(PROJ, 'scenes/main.pix3scene');
 const DEEP = `const deep = (root, sel, acc = []) => { for (const el of root.querySelectorAll('*')) { if (el.matches(sel)) acc.push(el); if (el.shadowRoot) deep(el.shadowRoot, sel, acc); } return acc; };`;
