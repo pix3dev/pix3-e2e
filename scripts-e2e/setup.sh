@@ -72,11 +72,79 @@ python3 - "$PROJ/scenes/main.pix3scene" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
-anchor = "            verticalAlign: stretch\n        children: []\n"
+anchor = "            bottom: 0\n        children: []\n"
 assert anchor in text, 'starter scene changed: update setup.sh'
-text = text.replace(anchor, "            verticalAlign: stretch\n        components:\n          - id: mover\n            type: user:Mover\n            enabled: true\n            config:\n              speed: 3\n        children: []\n")
+text = text.replace(anchor, "            bottom: 0\n        components:\n          - id: mover\n            type: user:Mover\n            enabled: true\n            config:\n              speed: 3\n        children: []\n")
 # A label the inspector edits (pix3_scene must answer what the inspector and the file have).
 text = text.rstrip('\n') + "\n      - id: title\n        type: Label2D\n        name: Title\n        properties:\n          label: Play\n          width: 400\n          height: 80\n"
+open(path, 'w').write(text)
+PY
+# Autoloads (pix3-core S10): a Counter singleton declared in pix3project.yaml, and a scene pair the
+# Hop script walks with changeScene — the counter must tick through it as one instance.
+cat > "$PROJ/scripts/Counter.ts" <<'TS'
+import { registerGameDebug, Script, type PropertySchema } from '@pix3/runtime';
+
+/** Autoload: one per play session, kept across changeScene. */
+export class Counter extends Script {
+  ticks = 0;
+  readonly id = Math.random().toString(36).slice(2);
+  readonly scenes: string[] = [];
+  static getPropertySchema(): PropertySchema {
+    return { nodeType: 'Counter', properties: [] };
+  }
+  onStart(): void {
+    registerGameDebug({
+      name: 'counter',
+      snapshot: () => ({ ticks: this.ticks, id: this.id, scenes: [...this.scenes], scene: this.scenes.at(-1) ?? null }),
+    });
+  }
+  onUpdate(): void {
+    this.ticks += 1;
+    const scene = this.scene?.getRootNodes()[0]?.name ?? null;
+    if (scene && this.scenes.at(-1) !== scene) this.scenes.push(scene);
+  }
+}
+TS
+cat > "$PROJ/scripts/Hop.ts" <<'TS'
+import { Script, type PropertySchema } from '@pix3/runtime';
+
+/** On the hop scene's root: after ten frames, change to the second scene. */
+export class Hop extends Script {
+  private frames = 0;
+  static getPropertySchema(): PropertySchema {
+    return { nodeType: 'Hop', properties: [] };
+  }
+  onUpdate(): void {
+    this.frames += 1;
+    if (this.frames === 10) void this.scene?.changeScene('res://scenes/hop-second.pix3scene', { transition: 'none' });
+  }
+}
+TS
+cat > "$PROJ/scenes/hop.pix3scene" <<'YAML'
+version: 1.0.0
+root:
+  - id: hop-root
+    type: Group2D
+    name: Hop Root
+    components:
+      - id: hop
+        type: user:Hop
+        enabled: true
+        config: {}
+YAML
+cat > "$PROJ/scenes/hop-second.pix3scene" <<'YAML'
+version: 1.0.0
+root:
+  - id: second-root
+    type: Group2D
+    name: Second Root
+YAML
+python3 - "$PROJ/pix3project.yaml" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+assert 'autoloads: []' in text, 'starter manifest changed: update setup.sh'
+text = text.replace('autoloads: []', 'autoloads:\n  - singleton: Counter\n    scriptPath: scripts/Counter.ts')
 open(path, 'w').write(text)
 PY
 echo "scripts-e2e project in $PROJ (core: $CORE)"

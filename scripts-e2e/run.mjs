@@ -13,8 +13,12 @@
 //   - a script and the nested module it imports edited → pix3_sync ok, executed stamps = sha on
 //     disk, the inspector shows the new field, the page never reloaded;
 //   - bot policies: a run uses the policy; a policy added during play → sync ok (no restart) and a
-//     run uses it; its helper outside bots/ changed → stale until restart, then the run sees it;
-//     the policy deleted → sync ok, a run refuses it;
+//     run uses it; its helper outside bots/ (imported only by policies) changed → sync ok during
+//     play (S11), the next run sees it; the policy deleted → sync ok, a run refuses it;
+//   - autoloads (S10): a Counter declared in pix3project.yaml ticks through a changeScene in the
+//     editor's play as one instance (pix3_game_run gameState), a play restart builds a fresh one;
+//   - a script deleted (S12): its placed component is parked, the scene stays clean and the file
+//     keeps it; the script restored → the component is live again with the file's config;
 //   - negative control: a script with a CSS import → `pix3 check` warns W_EDITOR_CSS_IMPORT, the
 //     sync answer carries viteClient:true; the same check type-checks the policy written
 //     `satisfies BotPolicy` against the kit's design/tests/bots/pix3-test-bot.d.ts.
@@ -174,7 +178,8 @@ try {
   // Speed is a pix3-number-field (scrub control): a plain click opens its text input.
   const speedField = `(() => { ${DEEP} const group = deep(document, '.script-prop-group')[0]; return group && deep(group, 'pix3-number-field')[0]; })()`;
   await waitUntil(async () => page.evaluate(`!!${speedField}`), 5000);
-  const at = await page.evaluate(`(() => { const r = ${speedField}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  // Scrolled into view first: the margin rows (W21) made the inspector taller than the panel.
+  const at = await page.evaluate(`(() => { ${speedField}.scrollIntoView({ block: 'center' }); const r = ${speedField}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
   for (const type of ['mousePressed', 'mouseReleased']) await page.send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
   const speedInput = `${speedField}.shadowRoot.querySelector('input')`;
   await waitUntil(async () => page.evaluate(`!!${speedInput}`), 3000);
@@ -209,16 +214,21 @@ try {
   check('a run uses the added policy', rush.ok && JSON.stringify(rush).includes('rush here'), rush.verdict ?? rush);
 
   write('design/tests/lib/mark.ts', "export const MARK = 'mark-v2';\n");
-  const helperDuringPlay = await call('pix3_sync', { timeoutMs: 10000 });
-  check('a helper outside bots/ changed during play: stale, playing agent', helperDuringPlay.ok === false && helperDuringPlay.reason === 'stale' && helperDuringPlay.playing === 'agent', helperDuringPlay);
+  const playBefore = await call('pix3_play', { action: 'status' });
+  const helperDuringPlay = await syncOk(['design/tests/lib/mark.ts']);
+  const playAfter = await call('pix3_play', { action: 'status' });
+  check('a helper only policies import, changed during play: sync ok, no restart (S11)', helperDuringPlay.ok === true && playAfter.playing === true && playAfter.startedAt === playBefore.startedAt, { sync: helperDuringPlay, before: playBefore.startedAt, after: playAfter.startedAt });
+  check('…helper stamp = sha on disk', (await executed())['design/tests/lib/mark.ts'] === sha('design/tests/lib/mark.ts'));
+  const idle2 = await botRun('idle');
+  check('a run sees the new helper (mark-v2) in the same play', idle2.ok && JSON.stringify(idle2).includes('idle mark-v2'), idle2.verdict ?? idle2);
+  // A game module still waits for play to stop: the Mover's field module.
+  write('src/game/fields.ts', readFileSync(join(PROJ, 'src/game/fields.ts'), 'utf8') + '// touched during play\n');
+  const gameDuringPlay = await call('pix3_sync', { timeoutMs: 10000 });
+  check('a game module changed during play: still stale, playing agent', gameDuringPlay.ok === false && gameDuringPlay.reason === 'stale' && gameDuringPlay.playing === 'agent' && gameDuringPlay.pending?.includes('src/game/fields.ts'), gameDuringPlay);
   const restarted = await call('pix3_play', { action: 'restart' });
   check('agent restarts its play', restarted.ok, restarted);
-  const afterRestart = await syncOk(['design/tests/lib/mark.ts']);
+  const afterRestart = await syncOk(['src/game/fields.ts']);
   check('sync after the restart is ok', afterRestart.ok, afterRestart);
-  check('…helper stamp = sha on disk', (await executed())['design/tests/lib/mark.ts'] === sha('design/tests/lib/mark.ts'));
-  await sleep(500);
-  const idle2 = await botRun('idle');
-  check('a run sees the new helper (mark-v2)', idle2.ok && JSON.stringify(idle2).includes('idle mark-v2'), idle2.verdict ?? idle2);
 
   rmSync(join(PROJ, 'design/tests/bots/rush.ts'));
   const deleted = await call('pix3_sync', { timeoutMs: 10000 });
@@ -228,6 +238,43 @@ try {
   const stopped = await call('pix3_play', { action: 'stop' });
   check('agent stops its play', stopped.ok, stopped);
   check('still no reload', (await page.evaluate('window.__marker')) === 'never-reloaded');
+
+  // 4b. A script deleted (S12): its placed component is parked like a fresh load parks it.
+  const moverText = readFileSync(join(PROJ, 'scripts/Mover.ts'), 'utf8');
+  const sceneBeforeDelete = readFileSync(join(PROJ, 'scenes/main.pix3scene'), 'utf8');
+  rmSync(join(PROJ, 'scripts/Mover.ts'));
+  const deletedScript = await call('pix3_sync', { timeoutMs: 10000 });
+  const parked = await call('pix3_scene', { nodeId: 'background' });
+  const statusParked = await call('pix3_status');
+  check('a deleted script: sync ok, the placed component is no longer live', deletedScript.ok && parked.node?.nodeId === 'background' && (parked.node?.components ?? []).length === 0, { sync: deletedScript.ok, components: parked.node?.components });
+  check('…the scene stays clean and the file keeps the component', statusParked.dirty?.length === 0 && Object.keys(statusParked.pending ?? {}).length === 0 && readFileSync(join(PROJ, 'scenes/main.pix3scene'), 'utf8') === sceneBeforeDelete && /type: user:Mover/.test(sceneBeforeDelete), { dirty: statusParked.dirty, pending: statusParked.pending });
+  write('scripts/Mover.ts', moverText);
+  const restoredScript = await syncOk(['scripts/Mover.ts']);
+  const backWait = await waitUntil(async () => (await call('pix3_scene', { nodeId: 'background' })).node?.components?.[0], 5000);
+  const back = backWait.v;
+  check('the script restored: the component is live again with the file\'s config', restoredScript.ok && back?.state?.id === 'mover' && back?.state?.config?.speed === 9, { sync: restoredScript, ms: backWait.ms, back, node: (await call('pix3_scene', { nodeId: 'background' })).node, status: await call('pix3_status'), errors: await call('pix3_errors') });
+
+  // 4c. Autoloads in the editor's play (S10): the Counter singleton from pix3project.yaml ticks
+  // through the hop scene's changeScene as one instance; a restart builds a fresh one.
+  const hopStart = await call('pix3_play', { action: 'start', scenePath: 'res://scenes/hop.pix3scene' });
+  check('agent play starts on the hop scene', hopStart.ok, hopStart);
+  await sleep(300);
+  // Play runs in real time from the start, so the hop (frame 10) may be behind us already: run to a
+  // tick count well past it and read which scenes the one singleton has seen.
+  const hop = await call('pix3_game_run', { until: [{ kind: 'gameState', path: 'ticks', op: 'gte', value: 60 }], maxFrames: 600, maxWallMs: 15000 });
+  const hopState = hop.game?.snapshot;
+  check('the autoload counter ticks through changeScene as one instance', hop.ok && /^PASS/.test(String(hop.verdict)) && JSON.stringify(hopState?.scenes) === JSON.stringify(['Hop Root', 'Second Root']) && hopState?.scene === 'Second Root' && hopState?.ticks >= 60, { verdict: hop.verdict, snapshot: hopState });
+  const later = await call('pix3_game_run', { until: [{ kind: 'gameState', path: 'ticks', op: 'gte', value: (hopState?.ticks ?? 0) + 30 }], maxFrames: 600, maxWallMs: 15000 });
+  check('…and keeps counting in the second scene, same id', later.game?.snapshot?.id === hopState?.id && later.game?.snapshot?.ticks >= (hopState?.ticks ?? 0) + 30 && later.game?.snapshot?.scene === 'Second Root', { verdict: later.verdict, snapshot: later.game?.snapshot });
+  const hopRestart = await call('pix3_play', { action: 'restart' });
+  await sleep(300);
+  const fresh = await call('pix3_game_run', { until: [{ kind: 'gameState', path: 'ticks', op: 'gte', value: 1 }], maxFrames: 60, maxWallMs: 10000 });
+  check('a play restart builds a fresh singleton', hopRestart.ok && fresh.game?.snapshot?.id && fresh.game.snapshot.id !== hopState?.id && fresh.game.snapshot.ticks < 30, { restart: hopRestart.ok, snapshot: fresh.game?.snapshot });
+  const hopErrors = await call('pix3_errors');
+  check('no runtime errors in the autoload plays', !JSON.stringify(hopErrors).includes('Autoload'), hopErrors);
+  const hopStopped = await call('pix3_play', { action: 'stop' });
+  check('agent stops the hop play', hopStopped.ok, hopStopped);
+
 
   // 5. Negative control: contract B broken on purpose.
   write('scripts/Styled.ts', "import './styled.css';\nexport const styled = 1;\n");
