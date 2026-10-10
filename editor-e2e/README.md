@@ -24,7 +24,9 @@ run in parallel with the gate):
   bridge sync, agent play → stale sync, second tab read-only + take over, menus (19 checks).
 - `gate-p1.mjs` — gate P1 of plan §G.2 (write model): real drags in the viewport, idle/upper-bound
   writes, Esc, N8, N10, external same key, two tabs, close → reopen, N9 draft across a dev-server
-  restart (37 checks; a free port and its own profile). Makes `proj/`, `.vite-cache-gate/` and
+  restart (39 checks; a free port and its own profile). The fixture is a pre-W21 file (anchored
+  rects, no margins), so the gate warms up with one rename — the editor's first write converts
+  the file — and measures its rows against the converted text. Makes `proj/`, `.vite-cache-gate/` and
   `profile-gate/` afresh each run — a `proj/` an earlier run left (the node moved off the press
   point) failed it 6/10 with "Invalid parameters".
   `PIX3_CDP_PROXY=1` runs it through the P2 CDP token proxy: Chrome is launched by the CLI's
@@ -48,6 +50,15 @@ run in parallel with the gate):
 - `n9-race.mjs [rounds]` — the N9 flake: stops the dev server the moment a Ctrl+S is on disk
   (its answer is lost), edits while it is down, reopens — is the draft offered and restored?
   Before editor-core `0c33774`: 6/6 rejected; after: offered every round. Uses `$PROJ_DIR`.
+- `anchor-resize.mjs` — write-model W21: a container resized by its east handle writes the
+  container alone (its width and centre), the anchored children live in their `layout:` margins —
+  child lines byte-identical, a fresh tab agrees, the inspector shows the knob's `Right` row only;
+  the same scene in the legacy form converts on its first write (margins in, anchored position
+  components `0`, the stretched bar's `width` gone, comments intact), a second resize is one node
+  again (25 checks; `proj-anchor/`, `.vite-cache-anchor/`, `profile-anchor/`).
+- `locale-draft.mjs` — write-model W22: a locale cell committed while the dev server is down is
+  drafted in IndexedDB against the disk sha; the tab closes, the server comes back, the new tab
+  offers it, Restore writes it, the panel shows it (11 checks; `proj-locale-draft/`).
 - `locale-follow.mjs` — write-model W20: locale tables follow the disk. Makes its own
   `proj-locale/` (`pix3 new 2d` + `locales/en.json`, `de.json`), opens Window → Localization with
   real clicks; an agent key appears after `pix3_sync`; an uncommitted cell edit + an agent write

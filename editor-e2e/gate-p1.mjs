@@ -153,11 +153,22 @@ const agentEdit = (from, to) => {
   writeFileSync(SCENE, text.replace(from, to));
 };
 
-const ORIGINAL = disk();
+let ORIGINAL = disk();
 let pageA, pageB, pageC, pageD;
 try {
   pageA = await openEditor('A');
   check('A is the writer', (await pageA.evaluate(`(async () => ((await window.__PIX3_DEBUG__.status()).writer))()`)) === 'self');
+
+  // --- W21 warm-up: the fixture is a pre-W21 file (anchored rects, no margins); the editor's first
+  // write converts its anchored nodes to the margin form, once. The rows below measure diffs
+  // against the converted file, which is what every later write is made on.
+  const legacy = disk();
+  check('W21: the fixture is a legacy file (anchors, no margins)', /horizontalAlign: (left|right|stretch)/.test(legacy) && !/^\s+(left|right|top|bottom): -?\d/m.test(legacy));
+  await rename(pageA, 'board', 'Board W21');
+  const converted = await waitUntil(() => disk() !== legacy, 4000);
+  check('W21: the first write converts the legacy file (margins in, every comment intact, in order)', converted.v && /^\s+(left|right|top|bottom): -?\d/m.test(disk()) && JSON.stringify(comments(legacy)) === JSON.stringify(comments(disk())), { ms: converted.ms, lines: changedLines(legacy, disk()) });
+  await waitUntil(async () => (await pageA.evaluate(`(async () => ((await window.__PIX3_DEBUG__.status()).dirty.length))()`)) === 0, 4000);
+  ORIGINAL = disk();
 
   // --- Drag + idle ------------------------------------------------------------------------------
   const p0 = await pos(pageA, NODE);
