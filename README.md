@@ -33,5 +33,11 @@ repository itself is never modified from here. Reports live in `reports/`.
   behind the token proxy), two non-1:1 TCP forwards standing in for VS Code's and the SSH
   `RemoteForward`; chrome-devtools-mcp 1.10.1 from the remote `.mcp.json` reaches the tab through
   the forward with the token and is refused without it (`./remote-e2e/setup.sh`, then
-  `node remote-e2e/run.mjs [--core <checkout>]`; default checkout `../pix3-core-ssh`).
+  `node remote-e2e/run.mjs [--core <checkout>]`; default checkout `../pix3-core`).
+- `imagegen-e2e/` — the image-gen key proxy (`pix3-core/.plans/editor-core-port.md` §11): a
+  `pix3 new 2d` project in `imagegen-e2e/work/`, its Vite with `PIX3_HOME` and the providers'
+  origins on a local mock, headless Chrome on a free port; a 1.x browser-stored key migrates to
+  `keys.json`, Generate from the panel reaches the mock with the key header, no page response /
+  DOM / storage / log holds a key, the game page at `/` is refused (fetch, forged referrer,
+  framed, `window.open`) — `node imagegen-e2e/run.mjs [--core <checkout>]` (27 checks).
 - `reports/` — `pix3-core-p0-{w,s1,s12,human}.md`.

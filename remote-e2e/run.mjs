@@ -28,7 +28,7 @@ import { McpClient } from '../bridge-e2e/mcp.mjs';
 
 const HERE = import.meta.dirname;
 const coreFlag = process.argv.indexOf('--core');
-const CORE = resolve(coreFlag >= 0 ? process.argv[coreFlag + 1] : join(HERE, '..', '..', 'pix3-core-ssh'));
+const CORE = resolve(coreFlag >= 0 ? process.argv[coreFlag + 1] : join(HERE, '..', '..', 'pix3-core'));
 const CLI = join(CORE, 'packages', 'cli', 'src', 'index.ts');
 const { default: WebSocket } = await import(pathToFileURL(join(CORE, 'node_modules', 'ws', 'wrapper.mjs')).href);
 const PROJ = join(HERE, 'proj');
