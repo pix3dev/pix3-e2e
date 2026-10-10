@@ -46,6 +46,13 @@ run in parallel with the gate):
 - `n9-race.mjs [rounds]` — the N9 flake: stops the dev server the moment a Ctrl+S is on disk
   (its answer is lost), edits while it is down, reopens — is the draft offered and restored?
   Before editor-core `0c33774`: 6/6 rejected; after: offered every round. Uses `$PROJ_DIR`.
+- `locale-follow.mjs` — write-model W20: locale tables follow the disk. Makes its own
+  `proj-locale/` (`pix3 new 2d` + `locales/en.json`, `de.json`), opens Window → Localization with
+  real clicks; an agent key appears after `pix3_sync`; an uncommitted cell edit + an agent write
+  of another key → both on disk (once racing the commit: 412 → merge → write; once after the panel
+  followed); the same key → disk value, notice, `rejected-draft` in the journal (and while typing:
+  the cell shows the disk value + notice); a new/deleted locale file appears/disappears
+  (21 checks; free ports). `--core <checkout>`.
 - `esc3d.mjs` — Esc during a real 3D gizmo drag (aimed with `__PIX3_DEBUG__.screen(id)`), with a
   no-Esc control. Needs `proj3d/`: the same recipe as above with `recipe-grid-3d`.
 
