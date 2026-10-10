@@ -3,8 +3,9 @@
 //   pix3 editor  → the project's Vite dev server (detached, .pix3/dev.json) + headless Chrome
 //                  owned through --remote-debugging-pipe behind the CDP token proxy on a FREE
 //                  port (never a fixed one: another agent runs Chrome here too)
-//   pix3 agent-setup → .mcp.json with the pinned chrome-devtools-mcp launch for that port
-//                  (--wsEndpoint ws://127.0.0.1:<port>/pix3 + --wsHeaders with the token)
+//   pix3 agent-setup → .mcp.json with the pinned chrome-devtools-mcp launch naming the 0600
+//                  --config file ~/.pix3/cdp-mcp.json (wsEndpoint ws://127.0.0.1:<port>/pix3 +
+//                  wsHeaders with the token): no token in the project, none on a command line
 //   chrome-devtools-mcp (started exactly as .mcp.json says) → list_pages / select_page /
 //                  list_3p_developer_tools / execute_3p_developer_tool
 //
@@ -12,8 +13,10 @@
 // holds the new value; agent play → edit → sync is `stale, playing:'agent'` → restart → sync ok →
 // new value live; designer play (F6 through press_key) → `stop force` is not_owner and sync is
 // `stale, playing:'designer'`; the inline fallback (evaluate_script over __PIX3_DEBUG__) answers
-// the same; `pix3 agent-setup` is idempotent and --repair migrates a P1 --browserUrl entry; the
-// proxy refuses a missing or wrong token; a raw CDP probe shares the pipe with the MCP server.
+// the same; `pix3 agent-setup` is idempotent and --repair migrates a P1 --browserUrl entry and a
+// P2 --wsHeaders entry; the proxy refuses a missing or wrong token; a raw CDP probe shares the
+// pipe with the MCP server; while chrome-devtools-mcp runs, no process's command line and no
+// file of the project holds the token; `pix3 editor`'s port check never sends it to a squatter.
 // Everything started here is stopped at the end.
 //
 // Usage: node bridge-e2e/run.mjs [--core <pix3-core checkout>]   (after bridge-e2e/setup.sh)
@@ -90,6 +93,32 @@ const listeningPorts = pid => {
     }
   }
   return ports;
+};
+
+/** Every process whose command line contains `needle` (Linux /proc). */
+const commandLinesWith = needle => {
+  const hits = [];
+  for (const pid of readdirSync('/proc').filter(d => /^\d+$/.test(d))) {
+    try {
+      const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ');
+      if (cmdline.includes(needle)) hits.push(`${pid}: ${cmdline.slice(0, 120)}`);
+    } catch {
+      // gone, or not ours to read
+    }
+  }
+  return hits;
+};
+
+/** Files under `dir` (node_modules excluded: a link into the checkout) whose bytes contain `needle`. */
+const filesWith = (dir, needle) => {
+  const hits = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules') continue;
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) hits.push(...filesWith(path, needle));
+    else if (entry.isFile() && readFileSync(path).includes(needle)) hits.push(path);
+  }
+  return hits;
 };
 
 /** A raw CDP client through the proxy: resolves with {send, close} or rejects with the refusal. */
@@ -189,6 +218,7 @@ try {
   // 2. pix3 agent-setup: the config the agent would use, pointed at the recorded port. A config
   // from an earlier run (another port) is what --repair is for; the first write starts clean.
   // The P1 entry (open debugging port, no token) is what --repair migrates.
+  const CONFIG = join(HOME, 'cdp-mcp.json');
   const p1 = { mcpServers: { 'pix3-browser': { command: 'npx', args: ['-y', 'chrome-devtools-mcp@1.10.1', '--categoryExperimentalThirdParty=true', '--experimentalVision=true', `--browserUrl=http://127.0.0.1:${cdpPort}`] } } };
   writeFileSync(join(PROJ, '.mcp.json'), JSON.stringify(p1, null, 2));
   const p1Drift = cli('agent-setup', 'claude');
@@ -196,29 +226,73 @@ try {
   const p1Editor = cli('editor', '--headless', '--cdp-port', String(cdpPort));
   check('pix3 editor says the project config does not reach this Chrome', p1Editor.status === 0 && /agent-setup --repair/.test(p1Editor.out), p1Editor.out.split('\n').at(-2));
   const migrated = cli('agent-setup', 'claude', '--repair');
-  check('agent-setup --repair migrates it to --wsEndpoint/--wsHeaders', migrated.status === 0 && /repaired/.test(migrated.out), migrated.out.split('\n')[2]);
-  check('agent-setup never prints the token', !migrated.out.includes(token) && !p1Drift.out.includes(token) && /<token of ~\/\.pix3\/cdp-token>/.test(migrated.out));
+  check('agent-setup --repair migrates it to --config', migrated.status === 0 && /repaired/.test(migrated.out), migrated.out.split('\n')[2]);
+  // The P2 entry (--wsEndpoint + --wsHeaders: the token on the command line and in .mcp.json).
+  const p2 = { mcpServers: { 'pix3-browser': { command: 'npx', args: ['-y', 'chrome-devtools-mcp@1.10.1', '--categoryExperimentalThirdParty=true', '--experimentalVision=true', `--wsEndpoint=ws://127.0.0.1:${cdpPort}/pix3`, `--wsHeaders={"Authorization":"Bearer ${token}"}`] } } };
+  writeFileSync(join(PROJ, '.mcp.json'), JSON.stringify(p2, null, 2));
+  const p2Drift = cli('agent-setup', 'claude');
+  check('agent-setup names a P2 --wsHeaders entry as drift (exit 1)', p2Drift.status === 1 && /CDP token on its command line/.test(p2Drift.out), p2Drift.out.split('\n')[2]);
+  const p2Editor = cli('editor', '--headless', '--cdp-port', String(cdpPort));
+  check('pix3 editor says the P2 config does not reach this Chrome', p2Editor.status === 0 && /agent-setup --repair/.test(p2Editor.out), p2Editor.out.split('\n').at(-2));
+  const p2Migrated = cli('agent-setup', 'claude', '--repair');
+  check('agent-setup --repair migrates the P2 entry: no token left in .mcp.json', p2Migrated.status === 0 && /repaired/.test(p2Migrated.out) && !readFileSync(join(PROJ, '.mcp.json'), 'utf8').includes(token), p2Migrated.out.split('\n')[2]);
+  check('agent-setup never prints the token', ![p1Drift, migrated, p2Drift, p2Migrated, p1Editor, p2Editor].some(r => r.out.includes(token) || r.err.includes(token)));
   rmSync(join(PROJ, '.mcp.json.bak'), { force: true });
   rmSync(join(PROJ, '.mcp.json'), { force: true });
+  rmSync(CONFIG, { force: true });
   const setup = cli('agent-setup', 'claude');
-  check('agent-setup writes .mcp.json for the recorded port', setup.status === 0 && setup.out.includes(`ws://127.0.0.1:${cdpPort}/pix3`), setup.out.split('\n')[0]);
+  check('agent-setup writes .mcp.json and the --config file for the recorded port', setup.status === 0 && setup.out.includes(`ws://127.0.0.1:${cdpPort}/pix3`) && /\(0600, written\)/.test(setup.out), setup.out.split('\n').slice(0, 2));
   const setupAgain = cli('agent-setup', 'claude');
-  check('agent-setup is idempotent', setupAgain.status === 0 && /up to date/.test(setupAgain.out), setupAgain.out.split('\n')[2]);
+  check('agent-setup is idempotent', setupAgain.status === 0 && /up to date/.test(setupAgain.out) && /\(0600, unchanged\)/.test(setupAgain.out), setupAgain.out.split('\n')[2]);
   const written = readFileSync(join(PROJ, '.mcp.json'), 'utf8');
-  writeFileSync(join(PROJ, '.mcp.json'), written.replace(`127.0.0.1:${cdpPort}`, '127.0.0.1:9333'));
+  writeFileSync(join(PROJ, '.mcp.json'), written.replace('cdp-mcp.json', 'other-cdp.json'));
   const drift = cli('agent-setup', 'claude');
-  check('agent-setup reports a drifted port and exits 1', drift.status === 1 && /--repair/.test(drift.out), drift.out.split('\n')[2]);
+  check('agent-setup reports a drifted entry and exits 1', drift.status === 1 && /--repair/.test(drift.out), drift.out.split('\n')[2]);
   const repair = cli('agent-setup', 'claude', '--repair');
   check('agent-setup --repair rewrites it (with a .bak) and exits 0', repair.status === 0 && /repaired/.test(repair.out) && readFileSync(join(PROJ, '.mcp.json'), 'utf8') === written && existsSync(join(PROJ, '.mcp.json.bak')), repair.out.split('\n')[2]);
   rmSync(join(PROJ, '.mcp.json.bak'), { force: true });
+  // A --config file for another port (pix3 editor moved): pix3 editor names it, agent-setup rewrites it.
+  const goodConfig = readFileSync(CONFIG, 'utf8');
+  writeFileSync(CONFIG, goodConfig.replace(`127.0.0.1:${cdpPort}`, '127.0.0.1:9333'));
+  const movedEditor = cli('editor', '--headless', '--cdp-port', String(cdpPort));
+  check('pix3 editor names a --config file that does not reach this Chrome', movedEditor.status === 0 && movedEditor.out.includes(CONFIG) && /agent-setup --repair/.test(movedEditor.out), movedEditor.out.split('\n').at(-2));
+  const moved = cli('agent-setup', 'claude');
+  check('agent-setup rewrites the --config file (updated), the project file stays', moved.status === 0 && /\(0600, updated\)/.test(moved.out) && readFileSync(CONFIG, 'utf8') === goodConfig && readFileSync(join(PROJ, '.mcp.json'), 'utf8') === written, moved.out.split('\n').slice(1, 3));
   const launch = JSON.parse(readFileSync(join(PROJ, '.mcp.json'), 'utf8')).mcpServers['pix3-browser'];
   check('.mcp.json pins chrome-devtools-mcp with the 3p flag', launch.args.some(a => /^chrome-devtools-mcp@\d/.test(a)) && launch.args.includes('--categoryExperimentalThirdParty=true'), launch.args.slice(0, 4));
-  check('.mcp.json connects through the proxy with the token', launch.args.includes(`--wsEndpoint=ws://127.0.0.1:${cdpPort}/pix3`) && launch.args.includes(`--wsHeaders={"Authorization":"Bearer ${token}"}`) && !launch.args.some(a => a.startsWith('--browserUrl')));
+  const config = JSON.parse(readFileSync(CONFIG, 'utf8'));
+  const configMode = (await import('node:fs')).statSync(CONFIG).mode & 0o777;
+  check('.mcp.json names the --config file and holds no token; the file (0600) holds the endpoint and the token', launch.args.includes(`--config=${CONFIG}`) && !launch.args.some(a => a.startsWith('--browserUrl') || a.startsWith('--ws')) && !written.includes(token) && config.wsEndpoint === `ws://127.0.0.1:${cdpPort}/pix3` && config.wsHeaders === JSON.stringify({ Authorization: `Bearer ${token}` }) && configMode === 0o600, { args: launch.args.slice(-1), mode: configMode.toString(8) });
+
+  // pix3 editor's port check never sends the token to a port that has not proven it knows it: a
+  // squatter (echoing the proxy's marker) sees no Authorization header. The check runs as
+  // pix3 editor runs it, not through pix3 editor: a refused port would make it launch a second
+  // Chrome on the next one. The editor runs above already went through the proven path.
+  const squatterSeen = [];
+  const squatter = (await import('node:http')).createServer((req, res) => {
+    squatterSeen.push(req.headers.authorization ?? null);
+    res.writeHead(401, { 'X-Pix3-Cdp-Proxy': '1', 'X-Pix3-Proof': 'not-a-proof-not-a-proof-not-a-proof' });
+    res.end();
+  });
+  const squatPort = await new Promise(r => squatter.listen(0, '127.0.0.1', () => r(squatter.address().port)));
+  // Asynchronously: a spawnSync would block this process's squatter from answering.
+  const squatCheck = await new Promise(r => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `import { inspectCdpPort } from ${JSON.stringify(pathToFileURL(join(CORE, 'packages', 'cli', 'src', 'editor', 'cdp-port.ts')).href)}; console.log(JSON.stringify(await inspectCdpPort(${squatPort}, { token: process.env.PROBE_TOKEN })));`], { env: { ...process.env, PROBE_TOKEN: token } });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', d => (stdout += d));
+    child.stderr.on('data', d => (stderr += d));
+    child.once('exit', () => r({ stdout, stderr }));
+  });
+  squatter.close();
+  check("the port check (pix3 editor's inspectCdpPort) proves, never sends the token: a squatter is foreign and saw no Authorization", /"kind":"foreign"/.test(squatCheck.stdout) && squatterSeen.length > 0 && squatterSeen.every(h => h === null), { state: squatCheck.stdout.trim() || squatCheck.stderr.slice(0, 200), seen: squatterSeen });
 
   // 3. chrome-devtools-mcp, exactly as configured.
   mcp = new McpClient({ command: launch.command, args: [...launch.args, '--no-usage-statistics', '--no-performance-crux'] });
   const tools = await mcp.start();
   check('MCP lists the 3p tools', tools.includes('list_3p_developer_tools') && tools.includes('execute_3p_developer_tool'), tools.filter(t => /3p|evaluate|page|press/.test(t)));
+  check('while chrome-devtools-mcp runs, the token is on no command line', commandLinesWith(token).length === 0, commandLinesWith(token));
+  check('no file of the project holds the token', filesWith(PROJ, token).length === 0, filesWith(PROJ, token));
   // The editor tab: wait for the bridge, then select it.
   let pageId = null;
   for (let i = 0; i < 60 && pageId === null; i++) {
