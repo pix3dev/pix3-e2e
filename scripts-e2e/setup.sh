@@ -83,10 +83,14 @@ PY
 # Hop script walks with changeScene — the counter must tick through it as one instance.
 cat > "$PROJ/scripts/Counter.ts" <<'TS'
 import { registerGameDebug, Script, type PropertySchema } from '@pix3/runtime';
+import { Hop } from './Hop';
 
 /** Autoload: one per play session, kept across changeScene. */
 export class Counter extends Script {
   ticks = 0;
+  /** Spec §6.19.2: the running scene's group `hops`, read every tick; callGroup once, at tick 3. */
+  hops: string[] = [];
+  called = -1;
   readonly id = Math.random().toString(36).slice(2);
   readonly scenes: string[] = [];
   static getPropertySchema(): PropertySchema {
@@ -95,13 +99,15 @@ export class Counter extends Script {
   onStart(): void {
     registerGameDebug({
       name: 'counter',
-      snapshot: () => ({ ticks: this.ticks, id: this.id, scenes: [...this.scenes], scene: this.scenes.at(-1) ?? null }),
+      snapshot: () => ({ ticks: this.ticks, id: this.id, scenes: [...this.scenes], scene: this.scenes.at(-1) ?? null, hops: [...this.hops], called: this.called, pinged: Hop.pinged }),
     });
   }
   onUpdate(): void {
     this.ticks += 1;
     const scene = this.scene?.getRootNodes()[0]?.name ?? null;
     if (scene && this.scenes.at(-1) !== scene) this.scenes.push(scene);
+    this.hops = (this.scene?.getNodesInGroup('hops') ?? []).map(node => node.nodeId);
+    if (this.ticks === 3) this.called = this.scene?.callGroup('hops', 'ping', 7) ?? -2;
   }
 }
 TS
@@ -110,7 +116,11 @@ import { Script, type PropertySchema } from '@pix3/runtime';
 
 /** On the hop scene's root: after ten frames, change to the second scene. */
 export class Hop extends Script {
+  static pinged = 0;
   private frames = 0;
+  ping(times: number): void {
+    Hop.pinged += times;
+  }
   static getPropertySchema(): PropertySchema {
     return { nodeType: 'Hop', properties: [] };
   }
@@ -126,6 +136,7 @@ root:
   - id: hop-root
     type: Group2D
     name: Hop Root
+    groups: [hops]
     components:
       - id: hop
         type: user:Hop
@@ -138,6 +149,12 @@ root:
   - id: second-root
     type: Group2D
     name: Second Root
+    groups: [hops]
+    children:
+      - id: second-child
+        type: Group2D
+        name: Second Child
+        groups: [hops, other]
 YAML
 python3 - "$PROJ/pix3project.yaml" <<'PY'
 import sys

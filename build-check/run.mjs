@@ -138,6 +138,7 @@ root:
   - id: second-root
     type: Group2D
     name: Second Root
+    groups: [flows]
     properties:
       width: 1920
       height: 1080
@@ -150,6 +151,7 @@ root:
       - id: second-background
         type: ColorRect2D
         name: Second Background
+        groups: [backgrounds]
         properties:
           width: 1920
           height: 1080
@@ -177,6 +179,7 @@ declare global {
       counter: { attached: number; ticks: number; id: string } | null;
       counterAtChange: { ticks: number; id: string } | null;
       counterInSecond: { ticks: number; id: string } | null;
+      groups: { backgrounds: string[]; called: number; pinged: number } | null;
     };
   }
 }
@@ -194,6 +197,7 @@ export const checkState = (): NonNullable<Window['__PIX3_CHECK__']> =>
     counter: null,
     counterAtChange: null,
     counterInSecond: null,
+    groups: null,
   });
 
 /** On the entry scene's root: after a few frames, change to the second scene. */
@@ -229,6 +233,15 @@ export class SecondFlow extends Script {
     state.prefabFound = roots.some(found);
     const counter = this.scene?.getAutoload(Counter);
     state.counterInSecond = counter ? { ticks: counter.ticks, id: counter.instanceId } : null;
+    // Spec §6.19.2: the group queries a script has during play (groups: in the scene file).
+    const backgrounds = this.scene?.getNodesInGroup('backgrounds') ?? [];
+    state.groups = { backgrounds: backgrounds.map(node => node.nodeId), called: 0, pinged: 0 };
+    state.groups.called = this.scene?.callGroup('flows', 'ping', 2) ?? -1;
+  }
+
+  ping(times: number): void {
+    const groups = checkState().groups;
+    if (groups) groups.pinged += times;
   }
 }
 `
@@ -460,6 +473,7 @@ const judge = async (name, page) => {
   check(`${name}: status running, frames > 0 and counting`, first?.status === 'running' && alive, { first: { ...first, check: undefined }, second: { ...second, check: undefined } });
   check(`${name}: changeScene reached the second scene, the nested prefab is in it`, second?.check?.changed && second?.check?.second && second?.check?.prefabFound, second?.check);
   check(`${name}: the library's GeometryMesh was constructed`, second?.check?.libBox === true);
+  check(`${name}: a script's this.scene.getNodesInGroup / callGroup see the scene's groups`, JSON.stringify(second?.check?.groups) === JSON.stringify({ backgrounds: ['second-background'], called: 1, pinged: 2 }), second?.check?.groups);
   check(`${name}: a script's own postprocessing import is the real library (no PostProcess node)`, second?.check?.fx === 'real', second?.check?.fx);
   check(`${name}: PhysicsBody2DBehavior attached from code, scene.physics2d is the real service`, second?.check?.body === 'registered', second?.check?.body);
   check(`${name}: the library's pointInPolygon (a non-class export) works`, second?.check?.polygon === true, second?.check?.polygon);

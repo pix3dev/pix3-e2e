@@ -314,6 +314,7 @@ try {
   const hop = await call('pix3_game_run', { until: [{ kind: 'gameState', path: 'ticks', op: 'gte', value: hopTarget }], maxFrames: 600, maxWallMs: 15000 });
   const hopState = hop.game?.snapshot;
   check('the autoload counter ticks through changeScene as one instance', hop.ok && /^PASS/.test(String(hop.verdict)) && JSON.stringify(hopState?.scenes) === JSON.stringify(['Hop Root', 'Second Root']) && hopState?.scene === 'Second Root' && hopState?.ticks >= 60, { verdict: hop.verdict, snapshot: hopState });
+  check('a script\'s this.scene.getNodesInGroup / callGroup in the editor\'s play: the hop scene\'s group, then the second scene\'s after changeScene', JSON.stringify(probe?.hops) === JSON.stringify(['second-root', 'second-child']) && probe?.called === 1 && probe?.pinged === 7, { hops: probe?.hops, called: probe?.called, pinged: probe?.pinged });
   const later = await call('pix3_game_run', { until: [{ kind: 'gameState', path: 'ticks', op: 'gte', value: (hopState?.ticks ?? 0) + 30 }], maxFrames: 600, maxWallMs: 15000 });
   check('…and keeps counting in the second scene, same id', later.game?.snapshot?.id === hopState?.id && later.game?.snapshot?.ticks >= (hopState?.ticks ?? 0) + 30 && later.game?.snapshot?.scene === 'Second Root', { verdict: later.verdict, snapshot: later.game?.snapshot });
   const hopRestart = await call('pix3_play', { action: 'restart' });
