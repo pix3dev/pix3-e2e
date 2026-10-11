@@ -71,6 +71,10 @@ when any check failed. `run.mjs` (M2) still wants a `proj/` by hand:
   followed); the same key → disk value, notice, `rejected-draft` in the journal (and while typing:
   the cell shows the disk value + notice); a new/deleted locale file appears/disappears
   (21 checks; free ports). `--core <checkout>`.
+- `texture-follow.mjs` — editor-core-port T1–T3: one PNG drawn by a Sprite2D, a Sprite3D and an
+  AnimatedSprite3D; fs overwrites it (red → green) → the pixel at each node's `screen(id)` in a CDP
+  screenshot turns green without a reload; a write during play is held (`pendingExternal`) and shows
+  after stop (11 checks; `proj-texture/` from `pix3 new 2d`, free ports). Without the fix 9/11.
 - `esc3d.mjs` — Esc during a real 3D gizmo drag (aimed with `__PIX3_DEBUG__.screen(id)`), with a
   no-Esc control (7 checks; `proj3d/` from `recipe-grid-3d`).
 
