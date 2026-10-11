@@ -126,7 +126,7 @@ const mainPath = join(PROJ, 'scenes/main.pix3scene');
 let main = readFileSync(mainPath, 'utf8');
 main = main.replace(
   /^(root:\n  - id: game-root\n    type: \w+\n    name: Game Root\n)/m,
-  `$1    components:\n      - id: flow\n        type: user:MainFlow\n        enabled: true\n        config: {}\n      - id: lib-box\n        type: user:LibBox\n        enabled: true\n        config: {}\n`
+  `$1    components:\n      - id: flow\n        type: user:MainFlow\n        enabled: true\n        config: {}\n      - id: lib-box\n        type: user:LibBox\n        enabled: true\n        config: {}\n      - id: extras\n        type: user:Extras\n        enabled: true\n        config: {}\n`
 );
 if (!main.includes('user:MainFlow')) throw new Error('could not place MainFlow on the starter root');
 main += prefabInstance('badge-in-main');
@@ -171,6 +171,9 @@ declare global {
       second: boolean;
       prefabFound: boolean;
       libBox: boolean;
+      fx: string | null;
+      body: string | null;
+      polygon: boolean | null;
       counter: { attached: number; ticks: number; id: string } | null;
       counterAtChange: { ticks: number; id: string } | null;
       counterInSecond: { ticks: number; id: string } | null;
@@ -185,6 +188,9 @@ export const checkState = (): NonNullable<Window['__PIX3_CHECK__']> =>
     second: false,
     prefabFound: false,
     libBox: false,
+    fx: null,
+    body: null,
+    polygon: null,
     counter: null,
     counterAtChange: null,
     counterInSecond: null,
@@ -273,6 +279,41 @@ export class LibBox extends Script {
 }
 `
 );
+// The review findings of the build (fix-build): a script importing postprocessing itself with no
+// PostProcess node, a behaviour attached from code (it reaches scene.physics2d), and the library's
+// non-class export pointInPolygon — each one a stub that throws if the build gets it wrong.
+write(
+  'scripts/Extras.ts',
+  `import { Script, PhysicsBody2DBehavior } from '@pix3/runtime';
+import { EffectComposer } from 'postprocessing';
+import { insideTriangle } from 'build-check-lib';
+import { checkState } from './MainFlow';
+
+export class Extras extends Script {
+  onStart(): void {
+    const state = checkState();
+    try {
+      const composer = new EffectComposer();
+      state.fx = typeof composer.addPass === 'function' ? 'real' : 'no addPass';
+      composer.dispose();
+    } catch (error) {
+      state.fx = String(error);
+    }
+    try {
+      this.node?.addComponent(new PhysicsBody2DBehavior('extras-body', 'core:PhysicsBody2D'));
+      state.body = this.scene?.physics2d ? 'registered' : 'no physics2d';
+    } catch (error) {
+      state.body = String(error);
+    }
+    try {
+      state.polygon = insideTriangle(0.2, 0.2) && !insideTriangle(2, 2);
+    } catch {
+      state.polygon = false;
+    }
+  }
+}
+`
+);
 const pkg = JSON.parse(readFileSync(join(PROJ, 'package.json'), 'utf8'));
 pkg.dependencies['build-check-lib'] = 'file:./lib';
 writeFileSync(join(PROJ, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
@@ -319,8 +360,8 @@ writeFileSync(
 writeFileSync(
   join(nm, 'build-check-lib/index.js'),
   LIB === 'namespace'
-    ? "import * as pix3 from '@pix3/runtime';\nexport const makeBox = () => new pix3.GeometryMesh({ id: 'lib-box', name: 'Lib Box', geometry: 'box' });\n"
-    : "import { GeometryMesh } from '@pix3/runtime';\nexport const makeBox = () => new GeometryMesh({ id: 'lib-box', name: 'Lib Box', geometry: 'box' });\n"
+    ? "import * as pix3 from '@pix3/runtime';\nexport const makeBox = () => new pix3.GeometryMesh({ id: 'lib-box', name: 'Lib Box', geometry: 'box' });\nexport const insideTriangle = (x, y) => pix3.pointInPolygon(x, y, [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }]);\n"
+    : "import { GeometryMesh, pointInPolygon } from '@pix3/runtime';\nexport const makeBox = () => new GeometryMesh({ id: 'lib-box', name: 'Lib Box', geometry: 'box' });\nexport const insideTriangle = (x, y) => pointInPolygon(x, y, [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }]);\n"
 );
 if (COMPRESS) {
   writeFileSync(
@@ -383,6 +424,11 @@ if (LIB === 'namespace') {
   check('N11: unrelated modules still stripped', record.stripped.includes('nodes/2D/UI/Slider2D'));
 }
 
+if (report.strip.enabled) {
+  check('fix-build: postprocessing imported by a script is bundled for the runtime too', report.libraries.postprocessing === 'bundled (static import)' && !html.includes('postprocessing was stripped'), report.libraries.postprocessing);
+  check('fix-build: Physics2DService and collision-shapes-2d kept (behaviour from code, pointInPolygon)', !record.stripped.includes('core/Physics2DService') && !record.stripped.includes('core/collision-shapes-2d'), record.stripped.filter(p => p.startsWith('core/')));
+}
+
 // The sandbox wrapper: an opaque-origin frame around the artifact (no allow-same-origin).
 writeFileSync(
   join(PROJ, 'dist/sandbox.html'),
@@ -414,6 +460,9 @@ const judge = async (name, page) => {
   check(`${name}: status running, frames > 0 and counting`, first?.status === 'running' && alive, { first: { ...first, check: undefined }, second: { ...second, check: undefined } });
   check(`${name}: changeScene reached the second scene, the nested prefab is in it`, second?.check?.changed && second?.check?.second && second?.check?.prefabFound, second?.check);
   check(`${name}: the library's GeometryMesh was constructed`, second?.check?.libBox === true);
+  check(`${name}: a script's own postprocessing import is the real library (no PostProcess node)`, second?.check?.fx === 'real', second?.check?.fx);
+  check(`${name}: PhysicsBody2DBehavior attached from code, scene.physics2d is the real service`, second?.check?.body === 'registered', second?.check?.body);
+  check(`${name}: the library's pointInPolygon (a non-class export) works`, second?.check?.polygon === true, second?.check?.polygon);
   {
     const c = second?.check;
     check(
