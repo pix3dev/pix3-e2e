@@ -16,9 +16,14 @@
 // chrome-devtools-mcp with a wrong token) it is refused; the token is in no command line, no
 // project file and no output. Everything started here is stopped at the end.
 //
+// Plus (A28): one configured forward port (--cdp-port stored remotely, --remote-port locally) and a
+// relay squatter on another port — Host kept or rewritten — that never proves the token and never
+// sees an Authorization header; agent-setup --remote writes nothing for it.
+//
 // Usage: node remote-e2e/run.mjs [--core <pix3-core checkout>]   (after remote-e2e/setup.sh)
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -137,7 +142,7 @@ try {
   // 1. Remote: the dev server, no Chrome, what to run on the other machine.
   const r1 = remote('editor', '--port', String(VR), '--cdp-port', String(CR));
   check('remote pix3 editor exits 0 and launches no Chrome', r1.status === 0 && /SSH session/.test(r1.out) && !existsSync(join(REMOTE_HOME, '.pix3', 'chrome.json')) && !existsSync(PID_FILE), { out: r1.out, err: r1.err });
-  check('remote pix3 editor prints the RemoteForward lines (its port) and the local command', r1.out.includes(`RemoteForward 127.0.0.1:${CR} 127.0.0.1:9333`) && r1.out.includes('ExitOnForwardFailure yes') && /editor --chrome-only --url http:\/\/localhost:\d+\/__pix3\//.test(r1.out));
+  check('remote pix3 editor prints the RemoteForward lines (its port) and the local command', r1.out.includes(`RemoteForward 127.0.0.1:${CR} 127.0.0.1:9333`) && r1.out.includes('ExitOnForwardFailure yes') && new RegExp(`editor --chrome-only --url http://localhost:\\d+/__pix3/ --remote-port ${CR}`).test(r1.out));
   check('remote pix3 editor: no token here yet', /no token here yet/.test(r1.out));
   const devInfo = JSON.parse(readFileSync(join(PROJ, '.pix3', 'dev.json'), 'utf8'));
   check('dev.json: the server on the remote port, no publicUrl yet', devInfo.port === VR && devInfo.publicUrl === undefined, devInfo.editorUrl);
@@ -147,11 +152,13 @@ try {
 
   // 3. Local: Chrome + proxy for the forwarded editor, no project.
   const publicEditorUrl = `http://localhost:${VL}/__pix3/`;
-  const l1 = local('editor', '--chrome-only', '--url', `http://localhost:${VL}/`, '--ssh', 'devbox', '--cdp-port', String(CL), '--headless');
+  const l1 = local('editor', '--chrome-only', '--url', `http://localhost:${VL}/`, '--ssh', 'devbox', '--cdp-port', String(CL), '--remote-port', String(CR), '--headless');
   check('local pix3 editor --chrome-only --url (no project) exits 0', l1.status === 0 && l1.out.includes(`Editor:     ${publicEditorUrl}`), { out: l1.out, err: l1.err });
   const localToken = readFileSync(join(LOCAL_HOME, '.pix3', 'cdp-token'), 'utf8').trim();
   const copyLine = l1.out.split('\n').map(l => l.trim()).find(l => l.startsWith('ssh devbox '));
-  check('local prints the token copy line and the RemoteForward target, never the token', Boolean(copyLine) && l1.out.includes(`RemoteForward 127.0.0.1:9333 127.0.0.1:${CL}`) && !l1.out.includes(localToken), copyLine);
+  check('local prints the token copy line and the RemoteForward line (remote CR → local CL), never the token', Boolean(copyLine) && l1.out.includes(`RemoteForward 127.0.0.1:${CR} 127.0.0.1:${CL}`) && !l1.out.includes(localToken), copyLine);
+  check('local records CR as the proxy\'s forward port', JSON.parse(readFileSync(join(LOCAL_HOME, '.pix3', 'cdp-forward-ports.json'), 'utf8')).ports.includes(CR));
+  check('local prints the editor tab it checked through the proxy', /Editor tab: http:\/\/localhost:\d+\/__pix3\//.test(l1.out), l1.out.split('\n').filter(l => l.startsWith('Editor tab')));
 
   // dev.json learns the address the browser used (the editor tab connects through VL).
   let info = null;
@@ -169,8 +176,8 @@ try {
   check('the copy line puts the token on the remote, 0600', copied?.status === 0 && readFileSync(remoteTokenFile, 'utf8').trim() === localToken && (statSync(remoteTokenFile).mode & 0o777) === 0o600, m?.[2]);
 
   // 5. Remote again: the forward proves the token (without receiving it); the browser address.
-  const r2 = remote('editor', '--cdp-port', String(CR));
-  check('remote pix3 editor: the forward is live and proven', r2.status === 0 && r2.out.includes(`CDP forward: live on 127.0.0.1:${CR}`) && r2.out.includes(`Browser:    ${publicEditorUrl}`) && r2.out.includes(`--url ${publicEditorUrl}`), r2.out.split('\n').filter(l => /forward|Browser|--url/.test(l)));
+  const r2 = remote('editor'); // the port stored by step 1: one configured port, never a scan
+  check('remote pix3 editor: the forward is live and proven', r2.status === 0 && r2.out.includes(`CDP forward: live on 127.0.0.1:${CR}`) && r2.out.includes(`Browser:    ${publicEditorUrl}`) && r2.out.includes(`--url ${publicEditorUrl} --remote-port ${CR}`), r2.out.split('\n').filter(l => /forward|Browser|--url/.test(l)));
 
   // 6. Remote agent-setup.
   const s1 = remote('agent-setup', 'claude', '--remote', '--cdp-port', String(CR));
@@ -241,6 +248,43 @@ try {
   check('chrome-devtools-mcp with a wrong token is refused', badPages.isError || !badPages.text.includes('/__pix3/'), badPages.text.slice(0, 200));
   const unchanged = remote('agent-setup', 'claude', '--remote', '--cdp-port', String(CR));
   check('agent-setup --remote again: up to date', unchanged.status === 0 && /up to date/.test(unchanged.out));
+
+  // 9. The relay squatter (A28): another user of the remote host holds S and relays every request
+  // to the real forward CR (Host kept, or rewritten to CR). It must never get the token.
+  const seen = [];
+  for (const rewriteHost of [false, true]) {
+    const S = await freePort();
+    const squatter = createHttpServer((req, res) => {
+      seen.push(req.headers);
+      const headers = { ...req.headers, ...(rewriteHost ? { host: `127.0.0.1:${CR}` } : {}) };
+      const up = httpRequest({ host: '127.0.0.1', port: CR, path: req.url, method: req.method, headers }, answer => {
+        res.writeHead(answer.statusCode ?? 502, answer.headers);
+        answer.pipe(res);
+      });
+      up.on('error', () => res.destroy());
+      req.pipe(up);
+    });
+    await new Promise(r => squatter.listen(S, '127.0.0.1', r));
+    const home = join(REMOTE_HOME, `squatter-${rewriteHost}`);
+    mkdirSync(join(home, '.pix3'), { recursive: true });
+    writeFileSync(join(home, '.pix3', 'remote-cdp-token'), `${localToken}\n`, { mode: 0o600 });
+    const env = { ...remoteEnv, HOME: home };
+    const before = readFileSync(join(PROJ, '.mcp.json'), 'utf8');
+    // Separate processes: the squatter lives in this event loop, so the CLI must not block it.
+    const runAsync = (...args) => new Promise(res => {
+      const child = spawn(process.execPath, [CLI, ...args], { cwd: PROJ, env });
+      let out = '', err = '';
+      child.stdout.on('data', d => (out += d));
+      child.stderr.on('data', d => (err += d));
+      child.on('exit', status => res({ status, out, err }));
+    });
+    const ed = await runAsync('editor', '--cdp-port', String(S));
+    check(`relay squatter (Host ${rewriteHost ? 'rewritten' : 'kept'}): remote pix3 editor says port S is held`, ed.status === 0 && ed.out.includes(`port ${S} on this host is held by something that does not prove the token`), ed.out.split('\n').filter(l => /CDP forward|held/.test(l)));
+    const as = await runAsync('agent-setup', 'claude', '--remote', '--cdp-port', String(S), '--repair');
+    check(`relay squatter (Host ${rewriteHost ? 'rewritten' : 'kept'}): agent-setup --remote writes nothing, exit 1`, as.status === 1 && /nothing written/.test(as.err) && !existsSync(join(home, '.pix3', 'remote-cdp.json')) && readFileSync(join(PROJ, '.mcp.json'), 'utf8') === before, { status: as.status, err: as.err.split('\n')[0] });
+    await new Promise(r => squatter.close(r));
+  }
+  check('the squatter saw requests but never an Authorization header', seen.length > 0 && seen.every(h => h.authorization === undefined), seen.length);
 } catch (error) {
   check('run', false, String(error?.stack ?? error));
 } finally {
