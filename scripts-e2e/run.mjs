@@ -230,6 +230,46 @@ try {
   const afterRestart = await syncOk(['src/game/fields.ts']);
   check('sync after the restart is ok', afterRestart.ok, afterRestart);
 
+  // 4a. S13: script roots re-imported DURING play must reach the registry on the restart. Before
+  // the fix a sync during play threw the re-imported roots away, the plugin broadcast
+  // `pix3:scripts` only for an update it propagated itself (never for a create/delete, never for
+  // a change the sync propagated first), so after `restart` → sync ok the game ran old classes.
+  const jumperSource = rev => `import { Script, type PropertySchema } from '@pix3/runtime';\n\nexport class Jumper extends Script {\n  readonly revision = '${rev}';\n  static getPropertySchema(): PropertySchema {\n    return { nodeType: 'Jumper', properties: [] };\n  }\n}\n`;
+  const titleComponent = (await call('pix3_scene', { nodeId: 'title' })).node?.components?.[0];
+  // (a) a script ADDED during play, its component placed in the scene by the same agent edit.
+  write('scripts/Jumper.ts', jumperSource('j1'));
+  const sceneText = readFileSync(join(PROJ, 'scenes/main.pix3scene'), 'utf8');
+  const titleAnchor = '        name: Title\n';
+  check('the scene has the Title node to place the new component on', sceneText.includes(titleAnchor) && !titleComponent);
+  write('scenes/main.pix3scene', sceneText.replace(titleAnchor, `${titleAnchor}        components:\n          - id: jump\n            type: user:Jumper\n            enabled: true\n            config: {}\n`));
+  const addedDuringPlay = await call('pix3_sync', { timeoutMs: 10000 });
+  check('a script added + placed during play: sync stale, playing agent, both pending', addedDuringPlay.ok === false && addedDuringPlay.reason === 'stale' && addedDuringPlay.playing === 'agent' && addedDuringPlay.pending?.includes('scripts/Jumper.ts') && addedDuringPlay.pending?.includes('scenes/main.pix3scene'), addedDuringPlay);
+  const restartAdded = await call('pix3_play', { action: 'restart' });
+  const syncAdded = await syncOk(['scripts/Jumper.ts', 'scenes/main.pix3scene']);
+  const jumperLive = await waitUntil(async () => (await call('pix3_scene', { nodeId: 'title' })).node?.components?.[0]?.state?.revision === 'j1', 5000);
+  const jumperNode = (await call('pix3_scene', { nodeId: 'title' })).node;
+  check('…restart → sync ok → the placed component runs the ADDED class (live, not parked)', restartAdded.ok && syncAdded.ok && jumperLive.v, { restart: restartAdded.ok, sync: syncAdded, ms: jumperLive.ms, components: jumperNode?.components, status: await call('pix3_status') });
+  check('…its executed stamp = sha on disk, play is on', (await executed())['scripts/Jumper.ts'] === sha('scripts/Jumper.ts') && (await call('pix3_play', { action: 'status' })).playing === true);
+  // (b) a MODIFY whose sync lands before chokidar's echo (the barrier propagates the bytes first,
+  // so the plugin's own `pix3:scripts` broadcast is suppressed as a duplicate).
+  write('scripts/Jumper.ts', jumperSource('j2'));
+  const modifiedDuringPlay = await call('pix3_sync', { timeoutMs: 10000 });
+  const restartModified = await call('pix3_play', { action: 'restart' });
+  const syncModified = await syncOk(['scripts/Jumper.ts']);
+  const jumperV2 = await waitUntil(async () => (await call('pix3_scene', { nodeId: 'title' })).node?.components?.[0]?.state?.revision === 'j2', 5000);
+  check('a script changed during play, synced at once: stale → restart → sync ok → the CHANGED class is live', modifiedDuringPlay.reason === 'stale' && restartModified.ok && syncModified.ok && jumperV2.v, { sync: modifiedDuringPlay, restart: restartModified.ok, after: syncModified, ms: jumperV2.ms, component: (await call('pix3_scene', { nodeId: 'title' })).node?.components?.[0] });
+  // (c) a script DELETED during play: after the restart the component is parked (S12), the file
+  // keeps it, the scene stays clean.
+  rmSync(join(PROJ, 'scripts/Jumper.ts'));
+  const sceneBeforeJumperDelete = readFileSync(join(PROJ, 'scenes/main.pix3scene'), 'utf8');
+  const deletedDuringPlay = await call('pix3_sync', { timeoutMs: 10000 });
+  const restartDeleted = await call('pix3_play', { action: 'restart' });
+  const syncDeleted = await syncOk(['scenes/main.pix3scene']);
+  const jumperParked = await waitUntil(async () => ((await call('pix3_scene', { nodeId: 'title' })).node?.components ?? []).length === 0, 5000);
+  const statusDeleted = await call('pix3_status');
+  check('a script deleted during play: stale → restart → sync ok → the component is parked, not the old class', deletedDuringPlay.reason === 'stale' && deletedDuringPlay.pending?.includes('scripts/Jumper.ts') && restartDeleted.ok && syncDeleted.ok && jumperParked.v, { sync: deletedDuringPlay, restart: restartDeleted.ok, after: syncDeleted, components: (await call('pix3_scene', { nodeId: 'title' })).node?.components });
+  check('…the scene stays clean and the file keeps the component', statusDeleted.dirty?.length === 0 && readFileSync(join(PROJ, 'scenes/main.pix3scene'), 'utf8') === sceneBeforeJumperDelete && /type: user:Jumper/.test(sceneBeforeJumperDelete), { dirty: statusDeleted.dirty, pending: statusDeleted.pending });
+
   rmSync(join(PROJ, 'design/tests/bots/rush.ts'));
   const deleted = await call('pix3_sync', { timeoutMs: 10000 });
   check('a policy deleted: sync ok, reported as null', deleted.ok && deleted.changed?.['design/tests/bots/rush.ts'] === null, deleted);
@@ -246,7 +286,7 @@ try {
   const deletedScript = await call('pix3_sync', { timeoutMs: 10000 });
   const parked = await call('pix3_scene', { nodeId: 'background' });
   const statusParked = await call('pix3_status');
-  check('a deleted script: sync ok, the placed component is no longer live', deletedScript.ok && parked.node?.nodeId === 'background' && (parked.node?.components ?? []).length === 0, { sync: deletedScript.ok, components: parked.node?.components });
+  check('a deleted script: sync ok, the placed component is no longer live', deletedScript.ok && parked.node?.nodeId === 'background' && (parked.node?.components ?? []).length === 0, { sync: deletedScript, components: parked.node?.components });
   check('…the scene stays clean and the file keeps the component', statusParked.dirty?.length === 0 && Object.keys(statusParked.pending ?? {}).length === 0 && readFileSync(join(PROJ, 'scenes/main.pix3scene'), 'utf8') === sceneBeforeDelete && /type: user:Mover/.test(sceneBeforeDelete), { dirty: statusParked.dirty, pending: statusParked.pending });
   write('scripts/Mover.ts', moverText);
   const restoredScript = await syncOk(['scripts/Mover.ts']);

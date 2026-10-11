@@ -4,9 +4,9 @@
 // network) — AGENTS.md rule 10. Plugin-level rows (N6 kill between renames, N4) are specs.
 // `PIX3_CDP_PROXY=1` runs it through the P2 CDP token proxy (cdp.mjs `launchBehindProxy`).
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createServer } from 'vite';
-import { pix3 } from '/data/igor.gritsenko/projects/pix3-stuff/pix3-core/packages/vite-plugin/dist/index.js';
+import { pathToFileURL } from 'node:url';
 import { freePort, launchChrome } from './cdp.mjs';
 
 const HERE = import.meta.dirname;
@@ -50,7 +50,11 @@ const startServer = async () => {
 // A fresh fixture, Vite cache and profile every run: the gate starts from the recipe's bytes with
 // the node at the press point. A `proj/` an earlier run left behind (the node moved, Board renamed)
 // made the first press miss the node — no drag, then NaN coordinates ("Invalid parameters").
-const CORE = join(HERE, '../../pix3-core');
+// The checkout under test: `--core <dir>` or $PIX3_CORE (default ../../pix3-core); plugin and
+// editor come from its dist/.
+const coreFlag = process.argv.indexOf('--core');
+const CORE = coreFlag >= 0 ? resolve(process.argv[coreFlag + 1]) : (process.env.PIX3_CORE ?? join(HERE, '../../pix3-core'));
+const { pix3 } = await import(pathToFileURL(join(CORE, 'packages/vite-plugin/dist/index.js')).href);
 for (const dir of [PROJ, join(HERE, '.vite-cache-gate'), join(HERE, 'profile-gate')]) rmSync(dir, { recursive: true, force: true });
 cpSync(join(CORE, 'packages/runtime/fixtures/scene-corpus/recipe-tapper-2d/files'), PROJ, { recursive: true });
 symlinkSync(join(CORE, 'node_modules'), join(PROJ, 'node_modules'));

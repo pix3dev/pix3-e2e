@@ -10,19 +10,16 @@
 // 3. Auto-sized UI — a `flow` column with `autoSize` stacking un-sized sprites: the editor lays it
 //    out from decoded sizes, Node from header sizes; the children must land on the same positions.
 //
-// Uses `$PROJ_DIR` (default `proj/`, a recipe copy, see README); restores its `scenes/main.pix3scene`.
+// Async bridge v2, free ports, a fresh `proj-size/` from the corpus. `--core <checkout>`.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createServer } from 'vite';
-import { pix3 } from '/data/igor.gritsenko/projects/pix3-stuff/pix3-core/packages/vite-plugin/dist/index.js';
-import { launchChrome } from './cdp.mjs';
+import { pathToFileURL } from 'node:url';
 
-const CORE = '/data/igor.gritsenko/projects/pix3-stuff/pix3-core';
-const HERE = import.meta.dirname;
-const PROJ = join(HERE, process.env.PROJ_DIR ?? 'proj');
-const PORT = 5297;
-const results = [];
-const check = (name, pass, detail) => { results.push(!!pass); console.log(`${pass ? 'PASS' : 'FAIL'} ${name} — ${JSON.stringify(detail)}`); };
+import { bridge, HERE, makeChecks, makeProject, openEditor, resolveCore, startChrome, startServer } from './harness.mjs';
+
+const CORE = resolveCore();
+const PROJ = makeProject(CORE, 'recipe-tapper-2d', join(HERE, 'proj-size'));
+const { check, finish } = makeChecks();
 
 /** Equal as JSON documents, numbers within 1e-6 (the saver's float noise). */
 const same = (a, b) => {
@@ -38,16 +35,15 @@ const same = (a, b) => {
 const differing = (a = {}, b = {}) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !same(a[k], b[k])).map(k => ({ key: k, editor: a[k], node: b[k] }));
 
 // Node side: the runtime's own harness (`NodeAssetLoader` + the saver), loaded through Vite's SSR.
+const { createServer } = await import(pathToFileURL(join(CORE, 'node_modules', 'vite', 'dist', 'node', 'index.js')).href);
 const ssr = await createServer({ configFile: false, root: CORE, logLevel: 'warn', server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
 const nodeMod = await ssr.ssrLoadModule(`${CORE}/packages/runtime/src/node/index.ts`);
 const corpus = await ssr.ssrLoadModule(`${CORE}/packages/runtime/src/node/scene-corpus.ts`);
 const runtime = await ssr.ssrLoadModule(`${CORE}/packages/runtime/src/index.ts`);
 const { readImageHeaderSize } = await ssr.ssrLoadModule(`${CORE}/packages/runtime/src/core/image-header-size.ts`);
 
-mkdirSync(join(HERE, 'profile-size'), { recursive: true });
-const { chrome, browser } = await launchChrome(join(HERE, 'profile-size'), []);
+const { chrome, browser } = await startChrome(join(HERE, 'profile-size'), []);
 const scenePath = join(PROJ, 'scenes/main.pix3scene');
-const original = readFileSync(scenePath, 'utf8');
 let server;
 try {
   // --- images: raster from Chrome's own encoders, SVG variants by hand ----------------------------
@@ -107,13 +103,12 @@ try {
   writeFileSync(scenePath, scene);
 
   // --- editor ---------------------------------------------------------------------------------------
-  server = await createServer({ configFile: false, root: PROJ, logLevel: 'warn', cacheDir: join(HERE, '.vite-cache-size'), plugins: [pix3()], server: { port: PORT, strictPort: true, host: '127.0.0.1' } });
-  await server.listen();
-  const page = await browser.newPage('editor');
-  await page.navigate(`http://127.0.0.1:${PORT}/__pix3/`);
-  await page.waitFor(`!!window.__PIX3_DEBUG__ && !!window.__PIX3_DEBUG__.status().activeScene && !!window.__PIX3_DEBUG__.node('s0')`, 60000);
+  ({ server } = await startServer(CORE, PROJ, join(HERE, '.vite-cache-size')));
+  const page = await openEditor(browser, `http://127.0.0.1:${server.config.server.port}`, 'editor');
+  const b = bridge(page);
+  await page.waitFor(`(async () => !!(await window.__PIX3_DEBUG__.node('s0')))()`, 30000);
   await new Promise(r => setTimeout(r, 2500)); // animation resources and frame textures load async
-  const editorNode = id => page.evaluate(`(() => { const n = window.__PIX3_DEBUG__.node(${JSON.stringify(id)}); return n ? { saved: n.saved, position: n.transform?.position ?? null } : null; })()`);
+  const editorNode = async id => { const n = await b.node(id); return n ? { saved: n.saved, position: n.transform?.position ?? null } : null; };
 
   // --- Node -----------------------------------------------------------------------------------------
   const uninstall = nodeMod.installCanvasOnlyDocument();
@@ -148,18 +143,16 @@ try {
     check(`flow autoSize child f${i} (${flowKids[i]}): editor position == Node position`, editor && nodePos && same(editor.x, nodePos.x) && same(editor.y, nodePos.y), { editor, node: nodePos });
   }
   check('the scene file was not written by opening it', readFileSync(scenePath, 'utf8') === scene);
-  const pending = await page.evaluate('window.__PIX3_DEBUG__.pending()');
+  const pending = await b.pending();
   check('nothing pending after opening (flow positions and autoSize are not edits)', JSON.stringify(pending) === '{}', pending);
-  const errors = await page.evaluate('window.__PIX3_DEBUG__.errors().slice(0,4)');
+  const errors = (await b.errors()).slice(0, 4);
   check('no captured editor errors', errors.length === 0, errors);
 } catch (error) {
   check('run', false, String(error?.stack ?? error));
 } finally {
-  writeFileSync(scenePath, original);
   browser.close();
   chrome.kill();
   await server?.close();
   await ssr.close();
-  console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
-  process.exit(results.every(Boolean) ? 0 : 1);
+  finish();
 }

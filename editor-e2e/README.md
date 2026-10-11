@@ -11,17 +11,21 @@ not come up" and hung runs of the first gate record. After a change in `packages
 `.vite-cache*/`: the dev server pre-bundles `@pix3/runtime` there and does not notice the source
 changed.
 
-Project fixture (recreate before each run; `proj-race/`, `proj-size/` the same way for scripts
-run in parallel with the gate):
+Every script takes the checkout under test as `--core <dir>` (or `$PIX3_CORE`; default
+`../../pix3-core`) and loads the plugin from that checkout's `packages/vite-plugin/dist/index.js`,
+so a worktree can be checked without touching the main checkout. Each makes its own fixture project
+afresh from the scene corpus (`harness.mjs` `makeProject`: `proj-m3/`, `proj-race/`, `proj-size/`,
+`proj3d/`, the gate's `proj/`, …), on a free Vite port, with a fresh Chrome profile. Exit code is 1
+when any check failed. `run.mjs` (M2) still wants a `proj/` by hand:
 
-    rm -rf proj && mkdir proj && cp -r ../../pix3-core/packages/runtime/fixtures/scene-corpus/recipe-tapper-2d/files/. proj/ \
-      && ln -s ../../../pix3-core/node_modules proj/node_modules \
-      && printf '<!doctype html><html><body><div id="app"></div></body></html>\n' > proj/index.html
     ln -sfn ../../pix3-core/node_modules node_modules
 
 - `run.mjs` — M2: editor mounts on `/__pix3/` (8 checks).
-- `m3.mjs` + `harness.mjs` — M3: inspector rename → idle save, agent edit → reload, script edit,
-  bridge sync, agent play → stale sync, second tab read-only + take over, menus (19 checks).
+- `m3.mjs` — M3: inspector rename → idle save, agent edit → reload, script edit, bridge sync,
+  agent play → stale sync, second tab read-only + take over, menus (19 checks; `proj-m3/`).
+  `harness.mjs` is the shared half of m3, n9-race, esc3d and size-crosscheck: `--core`, the
+  fixture copy, the server on a free port, Chrome, `openEditor` (waits for the async bridge),
+  `bridge(page)` (every short form awaited), `makeChecks` (non-zero exit on a failure).
 - `gate-p1.mjs` — gate P1 of plan §G.2 (write model): real drags in the viewport, idle/upper-bound
   writes, Esc, N8, N10, external same key, two tabs, close → reopen, N9 draft across a dev-server
   restart (39 checks; a free port and its own profile). The fixture is a pre-W21 file (anchored
@@ -46,10 +50,11 @@ run in parallel with the gate):
   `Sprite3D`, `TiledSprite2D`, `Button2D`, `Bar2D`, `Slider2D`, `Checkbox2D`) saves the same
   node in the editor as the runtime's Node harness (loaded through Vite SSR); a `flow` column
   with `autoSize` over un-sized sprites lays out the same; nothing is pending after opening
-  (39 checks). Uses `$PROJ_DIR` (default `proj/`); restores its `scenes/main.pix3scene`.
+  (39 checks; `proj-size/`, the Node side through the checkout's Vite SSR).
 - `n9-race.mjs [rounds]` — the N9 flake: stops the dev server the moment a Ctrl+S is on disk
   (its answer is lost), edits while it is down, reopens — is the draft offered and restored?
-  Before editor-core `0c33774`: 6/6 rejected; after: offered every round. Uses `$PROJ_DIR`.
+  Before editor-core `0c33774`: 6/6 rejected; after: offered every round. Green = offered and
+  restored in every round, else exit 1 (`proj-race/`).
 - `anchor-resize.mjs` — write-model W21: a container resized by its east handle writes the
   container alone (its width and centre), the anchored children live in their `layout:` margins —
   child lines byte-identical, a fresh tab agrees, the inspector shows the knob's `Right` row only;
@@ -67,11 +72,11 @@ run in parallel with the gate):
   the cell shows the disk value + notice); a new/deleted locale file appears/disappears
   (21 checks; free ports). `--core <checkout>`.
 - `esc3d.mjs` — Esc during a real 3D gizmo drag (aimed with `__PIX3_DEBUG__.screen(id)`), with a
-  no-Esc control. Needs `proj3d/`: the same recipe as above with `recipe-grid-3d`.
+  no-Esc control (7 checks; `proj3d/` from `recipe-grid-3d`).
 
 The recipes left `create-pix3` (owner decision 2026-10-10); they live on as the scene corpus
-`packages/runtime/fixtures/scene-corpus/`. `gate-p1.mjs` speaks the async bridge v2
-(`await __PIX3_DEBUG__.status()` / `.node()`); `m3`, `esc3d`, `n9-race`, `size-crosscheck` still
-use the v1 sync calls.
+`packages/runtime/fixtures/scene-corpus/`. Every script speaks the async bridge v2
+(`await __PIX3_DEBUG__.status()` / `.node()` / `.find()` / `.pending()`); `m3`, `esc3d`, `n9-race`
+and `size-crosscheck` were ported from the v1 sync calls and fixed ports on 2026-10-11.
 - `plugin-barrier.mjs` — plugin-only S1 counter-example (needs its own `proj/` with a
   `scripts/entry→middle→leaf` chain; see the file).

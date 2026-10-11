@@ -1,41 +1,37 @@
-// write-model debt "N9 flake": the reopened tab rejected the IndexedDB draft as "the file changed
-// on disk since". Hypothesis: the dev server is stopped right after a save landed on disk but
+// write-model debt "N9 flake" (W18): the reopened tab rejected the IndexedDB draft as "the file
+// changed on disk since". Cause: the dev server is stopped right after a save landed on disk but
 // before its HTTP answer reached the tab (Vite destroys open sockets on close; the plugin journals
-// the version after the rename and only then answers). The tab sees a network failure, keeps the
-// old baseline, and its next draft is keyed to a sha the disk no longer has.
+// the version after the rename and only then answers). The tab saw a network failure, kept the
+// old baseline, and its next draft was keyed to a sha the disk no longer had.
 //
 // Each round: open the editor, rename, Ctrl+S, stop the server THE MOMENT the bytes are on disk
 // (tight poll — the gate's 20 ms poll + CDP round trips made this rare), rename again while the
-// server is down, wait for a draft checkpoint, close the tab, restart, reopen: is the draft offered?
+// server is down, wait for a draft checkpoint, close the tab, restart, reopen: is the draft offered
+// and restored? Green = offered and restored in every round (exit 1 otherwise).
 //
-//   node n9-race.mjs [rounds=5]      (a fresh proj/ first, see README; PROJ_DIR=<dir> for another)
+//   node n9-race.mjs [rounds=5] [--core <checkout>]     (a fresh proj-race/ from the corpus)
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createServer } from 'vite';
-import { pix3 } from '/data/igor.gritsenko/projects/pix3-stuff/pix3-core/packages/vite-plugin/dist/index.js';
-import { launchChrome } from './cdp.mjs';
 
-const HERE = import.meta.dirname;
-const PROJ = join(HERE, process.env.PROJ_DIR ?? 'proj');
-const PORT = 5298;
-const BASE = `http://127.0.0.1:${PORT}`;
+import { bridge, click, DEEP, HERE, key, makeProject, openEditor, resolveCore, sleep, startChrome, startServer } from './harness.mjs';
+
+const CORE = resolveCore();
+const PROJ = makeProject(CORE, 'recipe-tapper-2d', join(HERE, 'proj-race'));
 const SCENE = join(PROJ, 'scenes/main.pix3scene');
-const ROUNDS = Number(process.argv[2] ?? 5);
-const DEEP = `const deep = (root, sel, acc = []) => { for (const el of root.querySelectorAll('*')) { if (el.matches(sel)) acc.push(el); if (el.shadowRoot) deep(el.shadowRoot, sel, acc); } return acc; };`;
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const ROUNDS = Number(process.argv.find(a => /^\d+$/.test(a)) ?? 5);
 const disk = () => readFileSync(SCENE, 'utf8');
 const sha = () => createHash('sha256').update(readFileSync(SCENE)).digest('hex');
 
 let server = null;
-const startServer = async () => {
-  server = await createServer({ configFile: false, root: PROJ, logLevel: 'silent', cacheDir: join(HERE, '.vite-cache-race'), plugins: [pix3()], server: { port: PORT, strictPort: true, host: '127.0.0.1' } });
-  await server.listen();
+let base = '';
+let port = null; // kept across restarts: the draft lives in the origin's IndexedDB
+const startDevServer = async () => {
+  ({ server, base, port } = await startServer(CORE, PROJ, join(HERE, '.vite-cache-race'), port));
 };
-mkdirSync(join(HERE, 'profile-race'), { recursive: true });
-const { chrome, browser } = await launchChrome(join(HERE, 'profile-race'), ['--window-size=1600,1000']);
+const { chrome, browser } = await startChrome(join(HERE, 'profile-race'));
 
-const openEditor = async name => {
+const openTab = async name => {
   const page = await browser.newPage(name);
   page.reqs = new Map();
   await page.send('Network.enable');
@@ -46,20 +42,12 @@ const openEditor = async name => {
     if (method === 'Network.responseReceived' && page.reqs.has(params.requestId)) page.reqs.get(params.requestId).status = params.response.status;
     if (method === 'Network.loadingFailed' && page.reqs.has(params.requestId)) page.reqs.get(params.requestId).status = 'failed:' + params.errorText;
   };
-  await page.navigate(`${BASE}/__pix3/`);
-  await page.waitFor(`!!window.__PIX3_DEBUG__ && !!window.__PIX3_DEBUG__.status().activeScene`, 60000);
+  await page.navigate(`${base}/__pix3/`);
+  await page.waitFor(`(async () => !!window.__PIX3_DEBUG__ && !!(await window.__PIX3_DEBUG__.status()).activeScene)()`, 60000);
   await sleep(800);
   return page;
 };
 const closePage = page => browser.send('Target.closeTarget', { targetId: page.targetId });
-const click = async (page, selector) => {
-  const rect = await page.evaluate(`(() => { ${DEEP} const el = deep(document, ${JSON.stringify(selector)})[0]; if (!el) return null; el.scrollIntoView?.({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
-  if (!rect) throw new Error(`nothing matches ${selector}`);
-  for (const type of ['mousePressed', 'mouseReleased']) await page.send('Input.dispatchMouseEvent', { type, x: rect.x, y: rect.y, button: 'left', clickCount: 1 });
-};
-const key = async (page, keyName, code, vk, modifiers = 0) => {
-  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: keyName, code, windowsVirtualKeyCode: vk, modifiers });
-};
 const blur = page => page.evaluate(`(() => { ${DEEP} for (const el of deep(document, 'input, textarea')) el.blur(); document.activeElement?.blur?.(); return true; })()`);
 const rename = async (page, nodeId, text) => {
   await click(page, `[data-node-id="${nodeId}"]`);
@@ -73,11 +61,11 @@ const rename = async (page, nodeId, text) => {
 const notices = page => page.evaluate(`(() => { ${DEEP} return deep(document, '[data-notice-id]').map(n => n.textContent.replace(/\\s+/g, ' ').trim()); })()`);
 const drafts = page => page.evaluate(`new Promise(r => { const q = indexedDB.open('pix3-drafts'); q.onsuccess = () => { const tx = q.result.transaction('drafts', 'readonly'); const g = tx.objectStore('drafts').getAll(); g.onsuccess = () => r(g.result.map(d => ({ baselineSha: d.baselineSha, has: d.text.includes('Draft') }))); }; q.onerror = () => r(null); })`);
 
-const tally = { offered: 0, rejected: 0, other: 0, lostAnswer: 0 };
+const tally = { offered: 0, restored: 0, rejected: 0, other: 0, lostAnswer: 0 };
 try {
-  await startServer();
+  await startDevServer();
   for (let round = 1; round <= ROUNDS; round++) {
-    const page = await openEditor(`r${round}`);
+    const page = await openTab(`r${round}`);
     const saved = `Board Saved ${round}`;
     await rename(page, 'board', saved);
     // Ctrl+S, then stop the server the moment the bytes are on disk.
@@ -90,14 +78,14 @@ try {
     const answers = [...page.reqs.values()].map(r => r.status);
     const lost = answers.some(s => typeof s === 'string' || s === null);
     if (lost) tally.lostAnswer++;
-    const stateAfterSave = await page.evaluate(`window.__PIX3_DEBUG__.status().dirty`);
+    const stateAfterSave = (await bridge(page).status()).dirty;
     await rename(page, 'board', `Board Draft ${round}`);
     await sleep(3000); // ≥ one 2 s checkpoint
     const d = await drafts(page);
     const diskSha = sha();
     await closePage(page);
-    await startServer();
-    const reopened = await openEditor(`r${round}b`);
+    await startDevServer();
+    const reopened = await openTab(`r${round}b`);
     const seen = await (async () => { for (let i = 0; i < 50; i++) { const n = await notices(reopened); if (n.some(t => /Unsaved edits/.test(t))) return n; await sleep(100); } return notices(reopened); })();
     const offered = seen.some(t => /Unsaved edits .* were found/.test(t));
     const rejected = seen.some(t => /were not restored: the file changed on disk since/.test(t));
@@ -108,7 +96,8 @@ try {
       await click(reopened, '[data-notice-id] .host-banner__action');
       const t1 = Date.now();
       while (!disk().includes(`name: Board Draft ${round}`) && Date.now() - t1 < 5000) await sleep(50);
-      if (!disk().includes(`name: Board Draft ${round}`)) { tally.other++; console.log('restore did not reach the disk'); }
+      if (disk().includes(`name: Board Draft ${round}`)) tally.restored++;
+      else console.log('restore did not reach the disk');
     }
     await closePage(reopened);
     await sleep(300);
@@ -120,6 +109,7 @@ try {
   browser.close();
   chrome.kill();
   await server?.close();
-  console.log('TALLY', JSON.stringify(tally));
-  process.exit(0);
+  const green = tally.offered === ROUNDS && tally.restored === ROUNDS && tally.rejected === 0 && tally.other === 0;
+  console.log('TALLY', JSON.stringify(tally), green ? `\n${ROUNDS}/${ROUNDS} rounds offered and restored` : `\nFAIL: ${tally.offered}/${ROUNDS} offered, ${tally.restored}/${ROUNDS} restored`);
+  process.exit(green ? 0 : 1);
 }
