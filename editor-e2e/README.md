@@ -16,14 +16,13 @@ Every script takes the checkout under test as `--core <dir>` (or `$PIX3_CORE`; d
 so a worktree can be checked without touching the main checkout. Each makes its own fixture project
 afresh from the scene corpus (`harness.mjs` `makeProject`: `proj-m3/`, `proj-race/`, `proj-size/`,
 `proj3d/`, the gate's `proj/`, …), on a free Vite port, with a fresh Chrome profile. Exit code is 1
-when any check failed. `run.mjs` (M2) still wants a `proj/` by hand:
+when any check failed.
 
-    ln -sfn ../../pix3-core/node_modules node_modules
-
-- `run.mjs` — M2: editor mounts on `/__pix3/` (8 checks).
+- `run.mjs` — M2: editor mounts on `/__pix3/` — entry scene open, writer, viewport canvas, no
+  `/@vite/client`, no request outside the known paths, no errors (8 checks; `proj-m2/`).
 - `m3.mjs` — M3: inspector rename → idle save, agent edit → reload, script edit, bridge sync,
   agent play → stale sync, second tab read-only + take over, menus (19 checks; `proj-m3/`).
-  `harness.mjs` is the shared half of m3, n9-race, esc3d and size-crosscheck: `--core`, the
+  `harness.mjs` is the shared half of run (M2), m3, n9-race, esc3d and size-crosscheck: `--core`, the
   fixture copy, the server on a free port, Chrome, `openEditor` (waits for the async bridge),
   `bridge(page)` (every short form awaited), `makeChecks` (non-zero exit on a failure).
 - `gate-p1.mjs` — gate P1 of plan §G.2 (write model): real drags in the viewport, idle/upper-bound
