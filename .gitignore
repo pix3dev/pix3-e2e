@@ -1,13 +1,12 @@
 .browsers/
 node_modules/
 *.tgz
-pix3-full/
-w-skeleton/editor-dist/
-w-skeleton/.chrome-profile/
 *.log
-s12-patch/dist/*.mjs
-s12-patch/dist/dumps/
-bridge-e2e/proj/
-bridge-e2e/home/
-bridge-e2e/profile*/
-debug-e2e/*.png
+*.png
+# fixture projects, Chrome profiles, HOMEs and Vite caches the checks make afresh
+proj*/
+profile*/
+home*/
+work/
+.vite-cache*/
+.chrome-profile/

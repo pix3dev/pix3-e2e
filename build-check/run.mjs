@@ -20,7 +20,7 @@
 //
 // The project is generated into build-check/proj/ (never inside pix3-core); its `node_modules`
 // is a directory of links to the checkout's entries (workspace links: @pix3/* resolve to its
-// packages) plus the local library. Chrome comes from pix3-core-spikes/chrome.sh.
+// packages) plus the local library. Chrome comes from pix3-e2e/chrome.sh.
 import { spawn, spawnSync } from 'node:child_process';
 import {
   cpSync,

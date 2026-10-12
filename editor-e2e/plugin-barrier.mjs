@@ -1,14 +1,18 @@
 // One-off browser check of @pix3/vite-plugin (dist) — plan §B.2/§B.3 in a real Chrome.
 import { spawn } from 'node:child_process';
 import { writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createServer } from 'vite';
-import { pix3 } from '/data/igor.gritsenko/projects/pix3-stuff/pix3-core/packages/vite-plugin/dist/index.js';
 import { Browser } from './cdp.mjs';
 
 const HERE = import.meta.dirname;
+// The checkout under test: `--core <dir>` or $PIX3_CORE (default ../../pix3-core).
+const coreFlag = process.argv.indexOf('--core');
+const CORE = coreFlag >= 0 ? resolve(process.argv[coreFlag + 1]) : (process.env.PIX3_CORE ?? join(HERE, '../../pix3-core'));
+const { pix3 } = await import(pathToFileURL(join(CORE, 'packages/vite-plugin/dist/index.js')).href);
 const PROJ = join(HERE, 'proj');
-const CHROME = '/data/igor.gritsenko/projects/pix3-stuff/pix3-core-spikes/chrome.sh';
+const CHROME = join(HERE, '../chrome.sh');
 const results = [];
 const check = (name, pass, detail) => { results.push({ name, pass: !!pass, detail }); console.log(`${pass ? 'PASS' : 'FAIL'} ${name}${detail !== undefined ? ' — ' + JSON.stringify(detail) : ''}`); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));

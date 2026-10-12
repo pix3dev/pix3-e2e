@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Recreate the bridge-e2e project: a 2D template project served by @pix3/vite-plugin from a
-# pix3-core checkout (default: ../../pix3-core-bridge; pass another as $1). node_modules is a
+# pix3-core checkout (default: ../../pix3-core; pass another as $1). node_modules is a
 # symlink into that checkout, so the plugin and the editor come from its packages' dist/ —
 # build them first:
 #   (cd <core> && npm run build -w packages/editor-core && cd packages/vite-plugin && npx tsc -p tsconfig.build.json)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-CORE="$(cd "${1:-$HERE/../../pix3-core-bridge}" && pwd)"
+CORE="$(cd "${1:-$HERE/../../pix3-core}" && pwd)"
 PROJ="$HERE/proj"
 rm -rf "$PROJ"
 # `pix3 new` from the checkout: the template, pix3project.yaml and the agent kit (with the

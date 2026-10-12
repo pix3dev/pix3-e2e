@@ -1,4 +1,4 @@
-// Minimal raw-CDP client (from pix3-core-spikes/editor-e2e/cdp.mjs) plus auto-attach to child
+// Minimal raw-CDP client (from pix3-e2e/editor-e2e/cdp.mjs) plus auto-attach to child
 // targets, which a sandboxed opaque-origin iframe is in Chrome 155 (site isolation). Speaks over
 // Node's own WebSocket (Node ≥ 22), so it needs no package and no checkout path.
 import { writeFileSync } from 'node:fs';

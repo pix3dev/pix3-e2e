@@ -1,43 +1,70 @@
-# pix3-core P0 spikes
+# pix3-e2e
 
-Throwaway spike code for `pix3/.plans/pix3-core.md` §G.1 (P0). Not a product repo, and the pix3
-repository itself is never modified from here. Reports live in `reports/`.
+Browser end-to-end checks for [pix3-core](https://github.com/pix3dev/pix3-core): the editor on
+`/__pix3/`, the agent bridge through chrome-devtools-mcp, scripts through Vite, the playable build,
+the player's debug mode, Remote SSH and the image-gen key proxy, each in a real headless Chrome.
+They live outside pix3-core because they need a browser, real ports and real processes; the
+package specs cover the rest.
 
-- `chrome.sh` — headless Chrome 155 (chrome-headless-shell) with WebGL2 via SwiftShader; this
-  server lacks `libasound`, so it is extracted from the Ubuntu deb into `.browsers/libs`.
-- `cdp-eval.mjs` — evaluate an expression in a page over raw CDP.
-- `mcp-call.mjs` — minimal stdio MCP client driving `chrome-devtools-mcp@1.10.1`.
-- `s4-metrics.py` — S4 metrics from a Codex rollout jsonl (`python3 s4-metrics.py <rollout>.jsonl`).
-- `pix3-full/` (gitignored) — local clone of pix3 with `w-skeleton/editor-patch/` applied; the
-  skeleton editor is built from here.
-- `w-skeleton/` — W: the current editor served at `/__pix3/` by a Vite plugin over `pix3 serve`,
-  plus the S4 3p-tool registration.
-- `s1-one-instance/` — S1: one runtime instance, no editor reload, sync barrier.
-- `s12-patch/` — S12: `ScenePatchWriter` + `norm` prototype.
-- `build-check/` — P1 artifact check (plan §B.6): build a template project with `@pix3/vite-plugin`
-  from a pix3-core checkout and open the single-file html via `vite preview`, `file://` and a
-  sandboxed iframe (`node build-check/run.mjs [--core ../pix3-core] [--template <name>]`).
-- `bridge-e2e/` — P1 agent bridge end to end (plan §D, `pix3-core/.plans/agent-bridge.md`): `setup.sh`
-  makes a project with `pix3 new` from a pix3-core checkout, `run.mjs` runs `pix3 editor` (detached
-  Vite + headless Chrome on a free port) and `pix3 agent-setup`, then drives chrome-devtools-mcp
-  from the written `.mcp.json` through `mcp.mjs`: 3p tools, sync with `expect`, play ownership,
-  inline fallback (`node bridge-e2e/run.mjs [--core <checkout>]`).
-- `scripts-e2e/` — P1 scripts and bot policies through Vite (`pix3-core/.plans/scripts-vite.md`):
-  `setup.sh` makes a `pix3 new 2d` project from a pix3-core checkout (default `../pix3-core-scripts`)
-  with a script whose fields come from a nested module and a bot policy with a helper; `run.mjs`
-  runs its Vite + headless Chrome on free ports and checks sync stamps, the inspector field, no
-  reload, bot policies added/changed/deleted (also during play), no `/@vite/client`, and the
-  contract-B negative control (`node scripts-e2e/run.mjs [--core <checkout>]`).
-- `remote-e2e/` — Remote SSH (`pix3-core/.plans/agent-bridge.md` A20–A23): two HOMEs on this box
-  (the "remote" with `SSH_CONNECTION`, the project and Vite; the "local" with headless Chrome
-  behind the token proxy), two non-1:1 TCP forwards standing in for VS Code's and the SSH
-  `RemoteForward`; chrome-devtools-mcp 1.10.1 from the remote `.mcp.json` reaches the tab through
-  the forward with the token and is refused without it (`./remote-e2e/setup.sh`, then
-  `node remote-e2e/run.mjs [--core <checkout>]`; default checkout `../pix3-core`).
-- `imagegen-e2e/` — the image-gen key proxy (`pix3-core/.plans/editor-core-port.md` §11): a
-  `pix3 new 2d` project in `imagegen-e2e/work/`, its Vite with `PIX3_HOME` and the providers'
-  origins on a local mock, headless Chrome on a free port; a 1.x browser-stored key migrates to
-  `keys.json`, Generate from the panel reaches the mock with the key header, no page response /
-  DOM / storage / log holds a key, the game page at `/` is refused (fetch, forged referrer,
-  framed, `window.open`) — `node imagegen-e2e/run.mjs [--core <checkout>]` (27 checks).
-- `reports/` — `pix3-core-p0-{w,s1,s12,human}.md`.
+Every check builds its own fixture project afresh, picks free ports, uses a fresh Chrome profile,
+prints `PASS` / `FAIL` per row and exits non-zero when any row failed.
+
+## Setup
+
+The checks expect a pix3-core checkout next to this one (`../pix3-core`); every one takes another
+checkout with `--core <dir>` (most also read `$PIX3_CORE`; the `setup.sh` scripts take it as
+`$1`), so a worktree can be checked without touching the main one.
+
+```sh
+git clone https://github.com/pix3dev/pix3-core.git
+git clone https://github.com/pix3dev/pix3-e2e.git
+(cd pix3-core && npm ci && npm run build --workspaces --if-present)
+
+# Dependencies (vite, ws, @pix3/*) come from the checkout's node_modules.
+ln -s ../../pix3-core/node_modules pix3-e2e/editor-e2e/node_modules
+
+# Headless Chrome, the version chrome.sh launches.
+cd pix3-e2e
+npx @puppeteer/browsers install chrome-headless-shell@155.0.8059.39 --path .browsers
+```
+
+`chrome.sh` runs chrome-headless-shell with WebGL2 through SwiftShader, so no GPU is needed. On a
+server without `libasound`, extract it from the distribution's package into `.browsers/libs`
+(Ubuntu: `apt download libasound2t64 && dpkg -x libasound2t64_*.deb .browsers/libs`); `chrome.sh`
+puts it on `LD_LIBRARY_PATH`.
+
+## Checks
+
+- `editor-e2e/` — the editor port: mount on `/__pix3/` (`run.mjs`), inspector, saves, agent
+  edits, two tabs (`m3.mjs`), write-model gates P1 and P2 (`gate-p1.mjs`, `gate-p2.mjs`), the N9
+  draft race, sizes against the Node runtime, anchors, locales, texture follow. See its
+  [README](editor-e2e/README.md).
+- `build-check/` — the playable build: a starter from `npm create pix3` built with
+  `@pix3/vite-plugin`, the single-file html opened through `vite preview`, `file://` and a
+  sandboxed iframe (`node build-check/run.mjs [--core <dir>] [--template <name>] [--compress]
+  [--vite 7|8] [--lib named|namespace]`).
+- `bridge-e2e/` — the agent bridge: `pix3 editor` (Vite + headless Chrome on a free port) and
+  `pix3 agent-setup`, then chrome-devtools-mcp from the written `.mcp.json` — 3p tools, sync with
+  `expect`, play ownership, inline fallback, the CDP token (`./bridge-e2e/setup.sh`, then
+  `node bridge-e2e/run.mjs [--core <dir>]`).
+- `scripts-e2e/` — scripts and bot policies through Vite: sync stamps, the inspector field, no
+  reload, policies added / changed / deleted (also during play), no `/@vite/client`
+  (`./scripts-e2e/setup.sh`, then `node scripts-e2e/run.mjs [--core <dir>]`).
+- `debug-e2e/` — the player's debug mode (`/?debug`): overlay, FPS and profiler activity, errors,
+  pause / step / resume, `?scene=`, the editor's run modes (`node debug-e2e/run.mjs [--core <dir>]
+  [--keep]`).
+- `remote-e2e/` — Remote SSH: two HOMEs on one box (the "remote" with `SSH_CONNECTION`, the
+  project and Vite; the "local" with Chrome behind the token proxy) joined by two TCP forwards;
+  chrome-devtools-mcp reaches the tab through the forward with the token and is refused without it
+  (`./remote-e2e/setup.sh`, then `node remote-e2e/run.mjs [--core <dir>]`).
+- `imagegen-e2e/` — the image-gen key proxy against a local mock of the providers: key
+  migration, Generate from the panel, no key in any page response, DOM, storage or log, the game
+  page refused (`node imagegen-e2e/run.mjs [--core <dir>]`).
+
+## Tools
+
+- `chrome.sh` — `./chrome.sh --remote-debugging-port=<port> [--user-data-dir=<dir>] [url]`.
+- `cdp-eval.mjs` — evaluate an expression in a page over raw CDP:
+  `node cdp-eval.mjs <port> <url substring> '<expression>'`.
+- `mcp-call.mjs` — minimal stdio MCP client driving `chrome-devtools-mcp@1.10.1`:
+  `CDP=http://127.0.0.1:<port> node mcp-call.mjs '[{"name": "list_pages", "arguments": {}}]'`.

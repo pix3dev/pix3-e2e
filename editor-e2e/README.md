@@ -1,6 +1,6 @@
 # editor-e2e — browser checks of the pix3-core editor port
 
-Throwaway harness (raw CDP, headless Chrome from `../chrome.sh`). Plugin and editor are loaded
+Raw CDP, headless Chrome from `../chrome.sh`. Plugin and editor are loaded
 from their `dist/` in `../../pix3-core` — rebuild both first:
 
     (cd ../../pix3-core && npm run build -w packages/editor-core && cd packages/vite-plugin && npx tsc -p tsconfig.build.json)
