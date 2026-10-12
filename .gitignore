@@ -10,3 +10,4 @@ s12-patch/dist/dumps/
 bridge-e2e/proj/
 bridge-e2e/home/
 bridge-e2e/profile*/
+debug-e2e/*.png
