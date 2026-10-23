@@ -1,4 +1,4 @@
-// Remote SSH end to end (pix3-core plan §E.3, §D.5; pix3-core/.plans/agent-bridge.md A20–A23),
+// Remote SSH end to end (pix3-core plan §E.3, §D.5; pix3-core/.plans/done/agent-bridge.md A20–A23),
 // both machines simulated on this box:
 //
 //   "remote" = HOME remote-e2e/home-remote, SSH_CONNECTION set, the project, Vite, the agent
