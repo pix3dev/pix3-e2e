@@ -68,8 +68,14 @@ when any check failed.
   real clicks; an agent key appears after `pix3_sync`; an uncommitted cell edit + an agent write
   of another key → both on disk (once racing the commit: 412 → merge → write; once after the panel
   followed); the same key → disk value, notice, `rejected-draft` in the journal (and while typing:
-  the cell shows the disk value + notice); a new/deleted locale file appears/disappears
-  (21 checks; free ports). `--core <checkout>`.
+  the cell shows the disk value + notice); a new/deleted locale file appears/disappears; an
+  inline key rename vs a key the agent removes / a name it takes; a project that declares its
+  locales follows `pix3project.yaml` (30 checks; free ports). `--core <checkout>`.
+- `ledger-reopen.mjs` — write-model W26: the flush ledger in IndexedDB (`pix3-flush-ledgers`)
+  outlives the tab — a stale agent write while no tab is open → the next tab's "An agent overwrote
+  your edit" → Restore writes; a reopen on the own write adopts the record (a stale write while
+  that tab is open is caught); an agent that read after the flush → no notice, record spent
+  (18 checks; `proj-ledger/`, `.vite-cache-ledger/`, `profile-ledger/`).
 - `texture-follow.mjs` — editor-core-port T1–T3: one PNG drawn by a Sprite2D, a Sprite3D and an
   AnimatedSprite3D; fs overwrites it (red → green) → the pixel at each node's `screen(id)` in a CDP
   screenshot turns green without a reload; a write during play is held (`pendingExternal`) and shows

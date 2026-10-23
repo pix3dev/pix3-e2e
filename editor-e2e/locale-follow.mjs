@@ -12,7 +12,11 @@
 //     panel followed (the typed text survives the re-render);
 //   - the same key: the disk value stays, a notice says so, the editor's table is in the journal
 //     (rejected-draft); with the typed text when the panel follows first, a notice too;
-//   - a new locale file appears as a target locale, a deleted one disappears.
+//   - a new locale file appears as a target locale, a deleted one disappears;
+//   - an inline key rename: the key removed on disk meanwhile → the rename ends with a notice,
+//     nothing renamed; a name the disk took meanwhile → not renamed, a notice;
+//   - a project that declares its locales: a file outside the list is ignored until
+//     `pix3project.yaml` lists it, then it is a target locale (no reload).
 //
 // Usage: node locale-follow.mjs [--core <pix3-core checkout>]
 import { spawn, spawnSync } from 'node:child_process';
@@ -46,6 +50,11 @@ const table = (locale, strings) => `${JSON.stringify({ $meta: { locale, name: lo
 const disk = locale => JSON.parse(readFileSync(join(PROJ, 'locales', `${locale}.json`), 'utf8')).strings;
 const agentWrite = (locale, change) => {
   const strings = { ...disk(locale), ...change };
+  writeFileSync(join(PROJ, 'locales', `${locale}.json`), table(locale, strings));
+};
+const agentDelete = (locale, k) => {
+  const strings = disk(locale);
+  delete strings[k];
   writeFileSync(join(PROJ, 'locales', `${locale}.json`), table(locale, strings));
 };
 
@@ -110,6 +119,20 @@ const typeInto = async (k, locale, text) => {
   await page.evaluate(`(() => { ${DEEP} const el = deep(document, ${JSON.stringify(cell(k, locale))})[0]; el.focus(); el.select(); })()`);
   await page.send('Input.insertText', { text });
 };
+/** Double-click a key cell (real input) and type a new name into the rename input (not committed). */
+const renameInput = k => `pix3-localization-panel input[aria-label="Rename ${k}"]`;
+const startRename = async (k, text) => {
+  // Notices of the earlier rows cover the table's first rows: closed first.
+  for (let rect; (rect = await rectOf('.host-banner__dismiss')); await sleep(100)) await clickAt(rect);
+  const rect = await page.evaluate(`(() => { ${DEEP} const el = deep(document, 'pix3-localization-panel span.loc-col-key').find(e => e.textContent.trim() === ${JSON.stringify(k)}); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  if (!rect) throw new Error(`no key cell ${k}`);
+  for (const clickCount of [1, 2]) for (const type of ['mousePressed', 'mouseReleased']) await page.send('Input.dispatchMouseEvent', { type, x: rect.x, y: rect.y, button: 'left', clickCount });
+  const shown = await waitUntil(async () => !!(await rectOf(renameInput(k))), 3000);
+  if (!shown.v) throw new Error(`no rename input for ${k}: ${JSON.stringify(await page.evaluate(`(() => { const e = document.elementFromPoint(${rect.x}, ${rect.y}); return { rect: ${JSON.stringify(rect)}, at: e && (e.tagName + '.' + e.className + ' ' + (e.textContent || '').slice(0, 40)) }; })()`))}`);
+  await page.evaluate(`(() => { ${DEEP} const el = deep(document, ${JSON.stringify(renameInput(k))})[0]; el.focus(); el.select(); })()`);
+  await page.send('Input.insertText', { text });
+};
+const hasRenameInput = async k => !!(await page.evaluate(`(() => { ${DEEP} return deep(document, ${JSON.stringify(renameInput(k))}).length; })()`));
 const journal = async path => (await (await fetch(`${BASE}/__pix3/api/history?path=${encodeURIComponent(path)}`)).json()).entries ?? [];
 
 try {
@@ -188,6 +211,43 @@ try {
   await call('pix3_sync', { timeoutMs: 10000 });
   const de = await waitUntil(async () => !(await targetOptions()).includes('de'), 5000);
   check('a deleted locale file disappears', de.v, await targetOptions());
+
+  // 5. Inline key rename against a moving disk.
+  await startRename('agent1', 'agent1-renamed');
+  agentDelete('en', 'agent1');
+  const ended = await waitUntil(async () => !(await hasRenameInput('agent1')), 8000);
+  check('renaming a key the agent removes: the rename ends', ended.v);
+  check('…a notice says nothing was renamed', /"agent1" was removed on disk while you were renaming it/.test(await notices()), await notices());
+  await call('pix3_sync', { timeoutMs: 10000 });
+  check('…no renamed key on disk', !('agent1-renamed' in disk('en')) && !('agent1' in disk('en')), disk('en'));
+  await startRename('agent2', 'taken');
+  agentWrite('en', { taken: 'agent took it' });
+  await waitUntil(async () => (await cellValue('taken', 'en')) === 'agent took it', 8000);
+  check('…the rename input survives the agent write of another key', (await hasRenameInput('agent2')) && (await page.evaluate(`(() => { ${DEEP} return deep(document, ${JSON.stringify(renameInput('agent2'))})[0].value; })()`)) === 'taken');
+  await key('Enter');
+  const refused = await waitUntil(async () => /"agent2" was not renamed: "taken" already exists/.test(await notices()), 3000);
+  check('renaming onto a key the agent just added: refused with a notice', refused.v, await notices());
+  await call('pix3_sync', { timeoutMs: 10000 });
+  const d5 = disk('en');
+  check('…both keys on disk as they were', d5.agent2 === 'second agent key' && d5.taken === 'agent took it', d5);
+
+  // 6. A project that declares its locales: the set follows pix3project.yaml.
+  const manifestPath = join(PROJ, 'pix3project.yaml');
+  const manifest = readFileSync(manifestPath, 'utf8');
+  writeFileSync(manifestPath, `${manifest}localization:\n  defaultLocale: en\n  locales: [en, fr]\n`);
+  await call('pix3_sync', { timeoutMs: 10000 });
+  writeFileSync(join(PROJ, 'locales', 'it.json'), table('it', { hello: 'Ciao' }));
+  await call('pix3_sync', { timeoutMs: 10000 });
+  await sleep(500);
+  check('declared locales: a file outside the list is not a locale', !(await targetOptions()).includes('it'), await targetOptions());
+  writeFileSync(manifestPath, `${manifest}localization:\n  defaultLocale: en\n  locales: [en, fr, it]\n`);
+  await call('pix3_sync', { timeoutMs: 10000 });
+  const it = await waitUntil(async () => (await targetOptions()).includes('it'), 5000);
+  check('…the manifest lists it: a target locale, no reload', it.v, await targetOptions());
+  writeFileSync(manifestPath, `${manifest}localization:\n  defaultLocale: en\n  locales: [en, it]\n`);
+  await call('pix3_sync', { timeoutMs: 10000 });
+  const frGone = await waitUntil(async () => !(await targetOptions()).includes('fr'), 5000);
+  check('…dropped from the manifest: gone, its file untouched', frGone.v && readFileSync(join(PROJ, 'locales', 'fr.json'), 'utf8') === table('fr', { hello: 'Bonjour' }), await targetOptions());
   check('the editor never reloaded', (await page.evaluate('window.__marker')) === 'never-reloaded');
   // A refused If-Match is the mechanism under test (the editor merges and writes again).
   const errors = page.errors.filter(e => !/favicon|412 \(Precondition Failed\)/.test(e.text));
